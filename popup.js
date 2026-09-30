@@ -1,52 +1,116 @@
+/**
+ * Subly - Popup Controller
+ * Version 2.0.2 - English Only
+ */
+
 class PopupController {
   constructor() {
-    this.fileInput = document.getElementById("fileInput");
-    this.loadBtn = document.getElementById("loadBtn");
-    this.status = document.getElementById("status");
-    this.dropArea = document.getElementById("dropArea");
-    this.urlInput = document.getElementById("urlInput");
-    this.fetchBtn = document.getElementById("fetchBtn");
-    this.settingsPanel = document.getElementById("settingsPanel");
-    this.toggleSettings = document.getElementById("toggleSettings");
-    this.fontSize = document.getElementById("fontSize");
-    this.fontSizeRange = document.getElementById("fontSizeRange");
-    this.position = document.getElementById("position");
-    this.opacity = document.getElementById("opacity");
-    this.opacityRange = document.getElementById("opacityRange");
-    this.textColor = document.getElementById("textColor");
-    this.subtitleToggle = document.getElementById("subtitleToggle");
-    this.toggleSubtitlesBtn = document.getElementById("toggleSubtitlesBtn");
-    this.versionDisplay = document.getElementById("versionDisplay");
-    this.resizer = document.getElementById("resizer");
-    this.sizeHint = document.getElementById("sizeHint");
-
     this.selectedFile = null;
     this.srtContent = null;
+    this.activeTab = null;
+    this.loadedSubtitles = [];
+    this.subtitlesEnabled = true;
+
     this.settings = {
       fontSize: 18,
+      fontFamily: "'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
       position: "bottom",
+      verticalOffset: 60,
       opacity: 80,
+      bgColor: "#000000",
       textColor: "#ffffff",
+      textShadow: "outline",
+      timeOffset: 0.0,
+      autoRestore: true,
     };
+
     this._updateTimeout = null;
-    this._activeTab = null;
     this._resizeSaveTimeout = null;
 
+    this.initDOMElements();
     this.init();
   }
 
-  init() {
+  initDOMElements() {
+    // Header
+    this.powerBtn = document.getElementById("powerBtn");
+    this.powerText = document.getElementById("powerText");
+    this.versionDisplay = document.getElementById("versionDisplay");
+
+    // Tabs
+    this.tabBtns = document.querySelectorAll(".tab-btn");
+    this.tabContents = document.querySelectorAll(".tab-content");
+
+    // Tab 1: Load
+    this.loadedCard = document.getElementById("loadedCard");
+    this.loadedName = document.getElementById("loadedName");
+    this.loadedCuesCount = document.getElementById("loadedCuesCount");
+    this.loadedOffset = document.getElementById("loadedOffset");
+    this.unloadBtn = document.getElementById("unloadBtn");
+    this.dropArea = document.getElementById("dropArea");
+    this.fileInput = document.getElementById("fileInput");
+    this.dropPrimary = document.getElementById("dropPrimary");
+    this.urlInput = document.getElementById("urlInput");
+    this.fetchBtn = document.getElementById("fetchBtn");
+    this.loadBtn = document.getElementById("loadBtn");
+    this.status = document.getElementById("status");
+    this.presetNotice = document.getElementById("presetNotice");
+    this.presetText = document.getElementById("presetText");
+    this.loadPresetBtn = document.getElementById("loadPresetBtn");
+
+    // Tab 2: Sync
+    this.syncValue = document.getElementById("syncValue");
+    this.syncBtns = document.querySelectorAll(".sync-btn[data-delta]");
+    this.syncResetBtn = document.getElementById("syncResetBtn");
+
+    // Tab 3: Style
+    this.previewSubtitle = document.getElementById("previewSubtitle");
+    this.fontSizeRange = document.getElementById("fontSizeRange");
+    this.fontSizeVal = document.getElementById("fontSizeVal");
+    this.fontFamily = document.getElementById("fontFamily");
+    this.position = document.getElementById("position");
+    this.vertOffsetRange = document.getElementById("vertOffsetRange");
+    this.vertOffsetVal = document.getElementById("vertOffsetVal");
+    this.textShadow = document.getElementById("textShadow");
+    this.opacityRange = document.getElementById("opacityRange");
+    this.opacityVal = document.getElementById("opacityVal");
+    this.textColor = document.getElementById("textColor");
+    this.bgColor = document.getElementById("bgColor");
+    this.textSwatches = document.querySelectorAll(".swatch[data-color]");
+    this.bgSwatches = document.querySelectorAll(".swatch[data-bg]");
+
+    // Tab 4: Search
+    this.cueSearchInput = document.getElementById("cueSearchInput");
+    this.cuesList = document.getElementById("cuesList");
+
+    // Footer & Resizer
+    this.resizer = document.getElementById("resizer");
+    this.sizeHint = document.getElementById("sizeHint");
+  }
+
+  async init() {
     this.setupEventListeners();
     this.setupResizer();
-    this.loadSettings();
-    this.loadVersion();
     this.applySavedSize();
-    this.checkAutoLoad();
+    await this.loadSettings();
+    await this.checkCurrentTabStatus();
   }
 
   setupEventListeners() {
-    this.fileInput.addEventListener("change", (e) => this.handleFileSelect(e.target.files[0]));
+    // Power toggle
+    this.powerBtn.addEventListener("click", () => this.toggleSubtitles());
+
+    // Tab switching
+    this.tabBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const tabId = btn.getAttribute("data-tab");
+        this.switchTab(tabId);
+      });
+    });
+
+    // File input & Drag/Drop
     this.dropArea.addEventListener("click", () => this.fileInput.click());
+    this.fileInput.addEventListener("change", (e) => this.handleFileSelect(e.target.files[0]));
 
     this.dropArea.addEventListener("dragover", (e) => {
       e.preventDefault();
@@ -65,34 +129,525 @@ class PopupController {
       }
     });
 
+    // URL Fetch
     this.urlInput.addEventListener("input", () => {
       this.fetchBtn.disabled = !this.urlInput.value.trim();
     });
-
     this.fetchBtn.addEventListener("click", () => this.handleUrlFetch());
-    this.loadBtn.addEventListener("click", () => this.loadSubtitles());
-    this.toggleSettings.addEventListener("click", () => {
-      const visible = this.settingsPanel.classList.toggle("visible");
-      this.toggleSettings.classList.toggle("open", visible);
-    });
 
+    // Load & Unload buttons
+    this.loadBtn.addEventListener("click", () => this.loadSubtitles());
+    this.unloadBtn.addEventListener("click", () => this.unloadSubtitles());
+
+    // Sync Steppers
+    this.syncBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const delta = parseFloat(btn.getAttribute("data-delta"));
+        this.adjustSync(delta);
+      });
+    });
+    this.syncResetBtn.addEventListener("click", () => this.resetSync());
+
+    // Style Controls
     this.fontSizeRange.addEventListener("input", (e) =>
-      this.updateSetting("fontSize", Number(e.target.value))
+      this.updateSetting("fontSize", parseInt(e.target.value, 10))
+    );
+    this.fontFamily.addEventListener("change", (e) =>
+      this.updateSetting("fontFamily", e.target.value)
+    );
+    this.position.addEventListener("change", (e) =>
+      this.updateSetting("position", e.target.value)
+    );
+    this.vertOffsetRange.addEventListener("input", (e) =>
+      this.updateSetting("verticalOffset", parseInt(e.target.value, 10))
+    );
+    this.textShadow.addEventListener("change", (e) =>
+      this.updateSetting("textShadow", e.target.value)
     );
     this.opacityRange.addEventListener("input", (e) =>
-      this.updateSetting("opacity", Number(e.target.value))
+      this.updateSetting("opacity", parseInt(e.target.value, 10))
+    );
+    this.textColor.addEventListener("input", (e) =>
+      this.updateSetting("textColor", e.target.value)
+    );
+    this.bgColor.addEventListener("input", (e) =>
+      this.updateSetting("bgColor", e.target.value)
     );
 
-    this.position.addEventListener("change", (e) => this.updateSetting("position", e.target.value));
-    this.textColor.addEventListener("input", (e) => this.updateSetting("textColor", e.target.value));
-    this.toggleSubtitlesBtn.addEventListener("click", () => this.toggleSubtitles());
+    // Color swatches
+    this.textSwatches.forEach((swatch) => {
+      swatch.addEventListener("click", () => {
+        const col = swatch.getAttribute("data-color");
+        this.textColor.value = col;
+        this.updateSetting("textColor", col);
+      });
+    });
+
+    this.bgSwatches.forEach((swatch) => {
+      swatch.addEventListener("click", () => {
+        const col = swatch.getAttribute("data-bg");
+        this.bgColor.value = col;
+        this.updateSetting("bgColor", col);
+      });
+    });
+
+    // Cue Search
+    this.cueSearchInput.addEventListener("input", () => this.filterCues());
   }
 
+  switchTab(tabId) {
+    this.tabBtns.forEach((b) => b.classList.toggle("active", b.getAttribute("data-tab") === tabId));
+    this.tabContents.forEach((c) => c.classList.toggle("active", c.id === tabId));
+  }
+
+  /* ================= TAB 1: FILE & URL HANDLING ================= */
+  handleFileSelect(file) {
+    if (!file) return;
+    const name = file.name.toLowerCase();
+    if (!name.endsWith(".srt") && !name.endsWith(".vtt") && !name.endsWith(".txt")) {
+      this.showStatus("Please select a valid .srt or .vtt file!", "error");
+      return;
+    }
+
+    this.selectedFile = file;
+    this.srtContent = null;
+    this.loadBtn.disabled = false;
+    this.dropPrimary.textContent = `✓ ${file.name}`;
+    this.clearStatus();
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const content = e.target.result;
+      const parser = window.SRTParser || (typeof SRTParser !== "undefined" ? SRTParser : null);
+      if (parser) {
+        this.loadedSubtitles = parser.parse(content);
+        this.srtContent = content;
+        this.populateCuesList();
+      }
+    };
+    reader.readAsText(file, "UTF-8");
+  }
+
+  async handleUrlFetch() {
+    const url = this.urlInput.value.trim();
+    if (!url) return;
+
+    try {
+      this.fetchBtn.disabled = true;
+      this.showStatus("Fetching subtitles...", "info");
+
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      const content = await response.text();
+      if (!content.includes("-->")) throw new Error("Invalid subtitle format");
+
+      const parser = window.SRTParser || (typeof SRTParser !== "undefined" ? SRTParser : null);
+      if (parser) {
+        this.loadedSubtitles = parser.parse(content);
+        this.srtContent = content;
+      }
+      this.selectedFile = { name: url.split("/").pop().replace(/%20/g, " ") || "subtitles.srt" };
+
+      this.loadBtn.disabled = false;
+      this.dropPrimary.textContent = `✓ ${this.selectedFile.name}`;
+      this.showStatus(`✓ Loaded ${this.loadedSubtitles.length} subtitle cues!`, "success");
+      this.populateCuesList();
+    } catch (error) {
+      console.error("Fetch error:", error);
+      this.showStatus("Failed to fetch subtitles from URL!", "error");
+    } finally {
+      this.fetchBtn.disabled = !this.urlInput.value.trim();
+    }
+  }
+
+  async loadSubtitles() {
+    if (!this.selectedFile && !this.srtContent) return;
+
+    try {
+      this.loadBtn.disabled = true;
+      this.showStatus("Injecting subtitles...", "info");
+
+      let content = this.srtContent;
+      let fileName = this.selectedFile ? this.selectedFile.name : "subtitles.srt";
+
+      if (!content && this.selectedFile) {
+        content = await this.readFile(this.selectedFile);
+      }
+
+      const tab = await this.getActiveTab();
+      if (!tab?.url?.includes("youtube.com")) {
+        this.showStatus("Please navigate to a YouTube video first!", "error");
+        this.loadBtn.disabled = false;
+        return;
+      }
+
+      const res = await this.sendMessage(tab.id, {
+        action: "loadSubtitles",
+        srtContent: content,
+        fileName: fileName,
+        saveCache: true,
+      });
+
+      if (res?.success) {
+        const count = res.count || (this.loadedSubtitles ? this.loadedSubtitles.length : 0);
+        this.showStatus(`✓ Successfully loaded ${count} subtitle cues!`, "success");
+        this.updateLoadedCard(fileName, count, this.settings.timeOffset);
+        this.updatePowerButtonUI(true);
+      } else {
+        throw new Error(res?.error || "Load failed");
+      }
+    } catch (error) {
+      console.warn("Load notice:", error.message);
+      if (
+        error.message?.includes("Receiving end does not exist") ||
+        error.message?.includes("Could not establish connection") ||
+        error.message?.includes("Extension context invalidated")
+      ) {
+        this.showStatus("Please refresh the YouTube tab (F5) and try again!", "error");
+      } else {
+        this.showStatus("Failed to load subtitles!", "error");
+      }
+      this.loadBtn.disabled = false;
+    }
+  }
+
+  async unloadSubtitles() {
+    try {
+      const tab = await this.getActiveTab();
+      if (tab?.id) {
+        await this.sendMessage(tab.id, { action: "unloadSubtitles" });
+      }
+      this.loadedCard.classList.remove("visible");
+      this.selectedFile = null;
+      this.srtContent = null;
+      this.loadedSubtitles = [];
+      this.dropPrimary.textContent = "Click or drag subtitle file here";
+      this.loadBtn.disabled = true;
+      this.populateCuesList();
+      this.showStatus("Subtitles unloaded successfully", "info");
+    } catch (_) {}
+  }
+
+  readFile(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target.result);
+      reader.onerror = reject;
+      reader.readAsText(file, "UTF-8");
+    });
+  }
+
+  /* ================= TAB 2: SYNC CONTROLS ================= */
+  async adjustSync(delta) {
+    const newOffset = Math.round(((this.settings.timeOffset || 0) + delta) * 10) / 10;
+    this.settings.timeOffset = newOffset;
+    this.updateSyncDisplay(newOffset);
+
+    try {
+      const tab = await this.getActiveTab();
+      if (tab?.id) {
+        await this.sendMessage(tab.id, { action: "adjustTimeOffset", delta: delta });
+      }
+    } catch (_) {}
+  }
+
+  async resetSync() {
+    this.settings.timeOffset = 0;
+    this.updateSyncDisplay(0);
+
+    try {
+      const tab = await this.getActiveTab();
+      if (tab?.id) {
+        await this.sendMessage(tab.id, { action: "resetTimeOffset" });
+      }
+    } catch (_) {}
+  }
+
+  updateSyncDisplay(offset) {
+    const sign = offset > 0 ? "+" : "";
+    this.syncValue.textContent = `${sign}${offset.toFixed(2)}s`;
+    this.syncValue.classList.toggle("negative", offset < 0);
+    this.loadedOffset.textContent = `Sync: ${sign}${offset.toFixed(1)}s`;
+  }
+
+  /* ================= TAB 3: STYLING CONTROLS ================= */
+  async updateSetting(key, value) {
+    this.settings[key] = value;
+    this.updateStyleUI();
+
+    clearTimeout(this._updateTimeout);
+    this._updateTimeout = setTimeout(async () => {
+      try {
+        await chrome.storage.sync.set({ subtitleSettings: this.settings });
+        const tab = await this.getActiveTab();
+        if (tab?.url?.includes("youtube.com")) {
+          await this.sendMessage(tab.id, { action: "updateSettings", settings: this.settings });
+        }
+      } catch (error) {
+        console.error("Update error:", error);
+      }
+    }, 120);
+  }
+
+  updateStyleUI() {
+    this.fontSizeRange.value = this.settings.fontSize;
+    this.fontSizeVal.textContent = `${this.settings.fontSize}px`;
+
+    this.fontFamily.value = this.settings.fontFamily;
+    this.position.value = this.settings.position;
+
+    this.vertOffsetRange.value = this.settings.verticalOffset || 60;
+    this.vertOffsetVal.textContent = `${this.settings.verticalOffset || 60}px`;
+
+    this.textShadow.value = this.settings.textShadow || "outline";
+
+    this.opacityRange.value = this.settings.opacity;
+    this.opacityVal.textContent = `${this.settings.opacity}%`;
+
+    this.textColor.value = this.settings.textColor;
+    this.bgColor.value = this.settings.bgColor || "#000000";
+
+    // Update Live Preview box
+    if (this.previewSubtitle) {
+      this.previewSubtitle.style.fontSize = `${this.settings.fontSize}px`;
+      this.previewSubtitle.style.fontFamily = this.settings.fontFamily;
+      this.previewSubtitle.style.color = this.settings.textColor;
+
+      const hex = (this.settings.bgColor || "#000000").replace("#", "");
+      const r = parseInt(hex.substring(0, 2), 16) || 0;
+      const g = parseInt(hex.substring(2, 4), 16) || 0;
+      const b = parseInt(hex.substring(4, 6), 16) || 0;
+      this.previewSubtitle.style.background = `rgba(${r}, ${g}, ${b}, ${this.settings.opacity / 100})`;
+
+      if (this.settings.textShadow === "outline") {
+        this.previewSubtitle.style.textShadow =
+          "-1.5px -1.5px 0 #000, 1.5px -1.5px 0 #000, -1.5px 1.5px 0 #000, 1.5px 1.5px 0 #000, 0 2px 4px rgba(0,0,0,0.8)";
+      } else if (this.settings.textShadow === "glow") {
+        this.previewSubtitle.style.textShadow = "0 0 8px rgba(255, 71, 87, 0.8), 0 0 2px rgba(0,0,0,0.8)";
+      } else if (this.settings.textShadow === "none") {
+        this.previewSubtitle.style.textShadow = "none";
+      } else {
+        this.previewSubtitle.style.textShadow = "0 1px 3px rgba(0, 0, 0, 0.8), 0 0 2px rgba(0, 0, 0, 0.9)";
+      }
+    }
+  }
+
+  /* ================= TAB 4: SEARCH CUES & JUMP ================= */
+  populateCuesList(cuesToRender = null) {
+    const list = cuesToRender || this.loadedSubtitles;
+    this.cuesList.innerHTML = "";
+
+    if (!list || list.length === 0) {
+      const emptyDiv = document.createElement("div");
+      emptyDiv.className = "no-cues";
+      emptyDiv.textContent = this.loadedSubtitles.length > 0 ? "No matching dialogue found!" : "No subtitles loaded yet. Please load a subtitle file in Files tab!";
+      this.cuesList.appendChild(emptyDiv);
+      return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    const parser = window.SRTParser || (typeof SRTParser !== "undefined" ? SRTParser : null);
+
+    const displayList = list.slice(0, 250);
+    displayList.forEach((sub) => {
+      const item = document.createElement("div");
+      item.className = "cue-item";
+      const timeStr = parser ? parser.formatTime(sub.startTime) : `${sub.startTime}s`;
+      item.innerHTML = `
+        <div class="cue-header">
+          <span class="cue-time">▶ ${timeStr}</span>
+          <span class="cue-idx">#${sub.index}</span>
+        </div>
+        <div class="cue-text">${this.cleanText(sub.text)}</div>
+      `;
+
+      item.addEventListener("click", () => this.jumpToTimestamp(sub.startTime));
+      fragment.appendChild(item);
+    });
+
+    this.cuesList.appendChild(fragment);
+  }
+
+  cleanText(text) {
+    return text.replace(/<[^>]*>/g, "").replace(/\n/g, " ");
+  }
+
+  filterCues() {
+    const query = this.cueSearchInput.value.trim().toLowerCase();
+    if (!query) {
+      this.populateCuesList();
+      return;
+    }
+
+    const filtered = this.loadedSubtitles.filter((sub) =>
+      sub.text.toLowerCase().includes(query)
+    );
+    this.populateCuesList(filtered);
+  }
+
+  async jumpToTimestamp(seconds) {
+    try {
+      const tab = await this.getActiveTab();
+      if (tab?.id) {
+        await this.sendMessage(tab.id, { action: "seekToTime", seconds: seconds });
+      }
+    } catch (_) {}
+  }
+
+  /* ================= SUBTITLE POWER & STATUS ================= */
+  async toggleSubtitles() {
+    try {
+      const tab = await this.getActiveTab();
+      if (!tab?.url?.includes("youtube.com")) {
+        this.showStatus("Please navigate to a YouTube video first!", "error");
+        return;
+      }
+
+      const res = await this.sendMessage(tab.id, { action: "toggleSubtitles" });
+      if (res?.success) {
+        this.subtitlesEnabled = res.enabled;
+        this.updatePowerButtonUI(this.subtitlesEnabled);
+      }
+    } catch (error) {
+      console.error("Toggle error:", error);
+    }
+  }
+
+  updatePowerButtonUI(enabled) {
+    this.subtitlesEnabled = enabled;
+    this.powerBtn.className = `power-btn ${enabled ? "active" : "inactive"}`;
+    this.powerText.textContent = enabled ? "ON" : "OFF";
+  }
+
+  updateLoadedCard(fileName, count, offset) {
+    this.loadedCard.classList.add("visible");
+    this.loadedName.textContent = fileName || "subtitles.srt";
+    this.loadedCuesCount.textContent = `${count} cues`;
+    const sign = (offset || 0) > 0 ? "+" : "";
+    this.loadedOffset.textContent = `Sync: ${sign}${(offset || 0).toFixed(1)}s`;
+  }
+
+  /* ================= STATUS INITIALIZATION ON OPEN ================= */
+  async checkCurrentTabStatus() {
+    try {
+      const tab = await this.getActiveTab();
+      if (!tab?.url?.includes("youtube.com")) return;
+
+      const res = await this.sendMessage(tab.id, { action: "getStatus" });
+      if (res?.success) {
+        if (res.settings) {
+          this.settings = { ...this.settings, ...res.settings };
+          this.updateStyleUI();
+        }
+
+        this.updatePowerButtonUI(res.subtitlesEnabled !== false);
+        this.updateSyncDisplay(res.timeOffset || 0);
+
+        if (res.subtitlesLoaded) {
+          this.loadedSubtitles = res.subtitles || [];
+          this.updateLoadedCard(res.fileName, res.subtitlesCount, res.timeOffset);
+          this.populateCuesList();
+        } else {
+          this.checkPresetMapping(tab.url);
+        }
+      }
+    } catch (_) {}
+  }
+
+  async checkPresetMapping(url) {
+    try {
+      const config = await this.fetchConfig();
+      if (!config?.videoMappings) return;
+
+      const videoId = new URLSearchParams(new URL(url).search).get("v");
+      if (videoId && config.videoMappings[videoId]) {
+        this.presetNotice.classList.add("visible");
+        this.loadPresetBtn.onclick = async () => {
+          this.presetNotice.classList.remove("visible");
+          this.urlInput.value = config.videoMappings[videoId];
+          this.fetchBtn.disabled = false;
+          await this.handleUrlFetch();
+          await this.loadSubtitles();
+        };
+      }
+    } catch (_) {}
+  }
+
+  async fetchConfig() {
+    try {
+      const response = await fetch(chrome.runtime.getURL("config.json"));
+      return response.ok ? await response.json() : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async loadSettings() {
+    try {
+      const result = await chrome.storage.sync.get(["subtitleSettings", "subtitlesEnabled"]);
+      if (result.subtitleSettings) {
+        this.settings = { ...this.settings, ...result.subtitleSettings };
+      }
+      if (result.subtitlesEnabled !== undefined) {
+        this.subtitlesEnabled = result.subtitlesEnabled;
+      }
+      this.updateStyleUI();
+      this.updatePowerButtonUI(this.subtitlesEnabled);
+      this.updateSyncDisplay(this.settings.timeOffset || 0);
+    } catch (error) {
+      console.error("Failed to load settings:", error);
+    }
+  }
+
+  async getActiveTab() {
+    if (this.activeTab) return this.activeTab;
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    this.activeTab = tab;
+    return tab;
+  }
+
+  async sendMessage(tabId, message) {
+    try {
+      return await chrome.tabs.sendMessage(tabId, message);
+    } catch (error) {
+      const errMsg = error.message || "";
+      // If the content script is missing or connection was disconnected (e.g. extension was just reloaded)
+      if (
+        errMsg.includes("Receiving end does not exist") ||
+        errMsg.includes("Could not establish connection") ||
+        errMsg.includes("Extension context invalidated")
+      ) {
+        try {
+          if (chrome.scripting && chrome.scripting.executeScript) {
+            await chrome.scripting.executeScript({
+              target: { tabId: tabId },
+              files: ["srt-parser.js", "content.js"],
+            });
+            await new Promise((r) => setTimeout(r, 250));
+            return await chrome.tabs.sendMessage(tabId, message);
+          }
+        } catch (injectError) {
+          console.warn("Subly: Auto-inject failed:", injectError.message);
+        }
+      }
+      throw error;
+    }
+  }
+
+  showStatus(message, type = "info") {
+    this.status.textContent = message;
+    this.status.className = `status ${type}`;
+    this.status.style.display = "block";
+  }
+
+  clearStatus() {
+    this.status.style.display = "none";
+  }
+
+  /* ================= RESIZER & PERSISTENCE ================= */
   setupResizer() {
-    let startX = 0;
-    let startY = 0;
-    let startW = 0;
-    let startH = 0;
+    let startX = 0, startY = 0, startW = 0, startH = 0;
     let dragging = false;
 
     this.resizer.addEventListener("pointerdown", (e) => {
@@ -109,23 +664,19 @@ class PopupController {
       if (!dragging) return;
       const minW = parseInt(getComputedStyle(document.body).minWidth, 10);
       const minH = parseInt(getComputedStyle(document.body).minHeight, 10);
-      const maxW = Math.min(
-        parseInt(getComputedStyle(document.body).maxWidth, 10),
-        window.screen.availWidth
-      );
+      const maxW = Math.min(parseInt(getComputedStyle(document.body).maxWidth, 10), window.screen.availWidth);
       const maxH = parseInt(getComputedStyle(document.body).maxHeight, 10);
 
       const w = Math.min(maxW, Math.max(minW, startW + e.clientX - startX));
       const h = Math.min(maxH, Math.max(minH, startH + e.clientY - startY));
+
       document.body.style.width = `${w}px`;
       document.body.style.height = `${h}px`;
-      this.sizeHint.textContent = ` \u2022 ${w}\u00d7${h}`;
+      this.sizeHint.textContent = `• ${w}×${h}`;
       this.saveSize(w, h);
     });
 
-    const stop = () => {
-      dragging = false;
-    };
+    const stop = () => { dragging = false; };
     this.resizer.addEventListener("pointerup", stop);
     this.resizer.addEventListener("pointercancel", stop);
   }
@@ -145,240 +696,9 @@ class PopupController {
         const cs = getComputedStyle(document.body);
         document.body.style.width = `${Math.min(width, parseInt(cs.maxWidth, 10))}px`;
         document.body.style.height = `${Math.min(height, parseInt(cs.maxHeight, 10))}px`;
-        this.sizeHint.textContent = ` \u2022 ${Math.round(width)}\u00d7${Math.round(height)}`;
+        this.sizeHint.textContent = `• ${Math.round(width)}×${Math.round(height)}`;
       }
-    } catch (_) {
-      // storage unavailable; keep default size
-    }
-  }
-
-  async loadSettings() {
-    try {
-      const result = await chrome.storage.sync.get(["subtitleSettings", "subtitlesEnabled"]);
-      if (result.subtitleSettings) {
-        this.settings = { ...this.settings, ...result.subtitleSettings };
-      }
-      this.updateUI();
-      this.updateSubtitleToggle(result.subtitlesEnabled !== false);
-    } catch (error) {
-      console.error("Failed to load settings:", error);
-    }
-  }
-
-  updateUI() {
-    this.fontSize.textContent = `${this.settings.fontSize}px`;
-    this.fontSizeRange.value = this.settings.fontSize;
-    this.position.value = this.settings.position;
-    this.opacity.textContent = `${this.settings.opacity}%`;
-    this.opacityRange.value = this.settings.opacity;
-    this.textColor.value = this.settings.textColor;
-  }
-
-  async loadVersion() {
-    try {
-      const manifest = chrome.runtime.getManifest();
-      this.versionDisplay.textContent = `v${manifest.version}`;
-    } catch (error) {
-      this.versionDisplay.textContent = "v1.0";
-    }
-  }
-
-  async getActiveTab() {
-    if (this._activeTab) return this._activeTab;
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    this._activeTab = tab;
-    return tab;
-  }
-
-  handleFileSelect(file) {
-    if (!file) return;
-    if (!file.name.toLowerCase().endsWith(".srt")) {
-      this.showStatus("Please select a valid SRT file", "error");
-      return;
-    }
-    this.selectedFile = file;
-    this.srtContent = null;
-    this.loadBtn.disabled = false;
-    this.dropArea.querySelector(".drop-zone-text").textContent = `Selected: ${file.name}`;
-    this.urlInput.value = "";
-    this.fetchBtn.disabled = true;
-    this.clearStatus();
-    this.loadSubtitles();
-  }
-
-  async handleUrlFetch() {
-    const url = this.urlInput.value.trim();
-    if (!url) return;
-
-    try {
-      this.fetchBtn.disabled = true;
-      this.showStatus("Fetching...", "info");
-
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-      const content = await response.text();
-      if (!content.includes("-->")) throw new Error("Invalid SRT format");
-
-      this.srtContent = content;
-      this.selectedFile = null;
-      this.loadBtn.disabled = false;
-      this.dropArea.querySelector(".drop-zone-text").textContent = "SRT fetched from URL";
-      this.showStatus("SRT fetched!", "success");
-    } catch (error) {
-      console.error("Fetch error:", error);
-      this.showStatus("Failed to fetch SRT", "error");
-    } finally {
-      this.fetchBtn.disabled = !this.urlInput.value.trim();
-    }
-  }
-
-  async loadSubtitles() {
-    if (!this.selectedFile && !this.srtContent) return;
-
-    try {
-      this.loadBtn.disabled = true;
-      this.showStatus("Loading...", "info");
-
-      let content = this.srtContent;
-      if (this.selectedFile) {
-        content = await this.readFile(this.selectedFile);
-      }
-
-      const tab = await this.getActiveTab();
-      if (!tab?.url?.includes("youtube.com/watch")) {
-        this.showStatus("Navigate to a YouTube video first", "error");
-        this.loadBtn.disabled = false;
-        return;
-      }
-
-      await this.sendMessage(tab.id, { action: "loadSubtitles", srtContent: content });
-      this.showStatus("Subtitles loaded!", "success");
-      this.updateSubtitleToggle(true);
-
-      setTimeout(() => window.close(), 1500);
-    } catch (error) {
-      console.error("Load error:", error);
-      if (error.message?.includes("Receiving end does not exist")) {
-        this.showStatus("Refresh the YouTube page and try again", "error");
-      } else {
-        this.showStatus("Failed to load subtitles", "error");
-      }
-      this.loadBtn.disabled = false;
-    }
-  }
-
-  readFile(file) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = (e) => resolve(e.target.result);
-      reader.onerror = reject;
-      reader.readAsText(file, "UTF-8");
-    });
-  }
-
-  async updateSetting(key, value) {
-    this.settings[key] = value;
-    this.updateUI();
-
-    clearTimeout(this._updateTimeout);
-    this._updateTimeout = setTimeout(async () => {
-      try {
-        await chrome.storage.sync.set({ subtitleSettings: this.settings });
-
-        const tab = await this.getActiveTab();
-        if (tab?.url?.includes("youtube.com")) {
-          await this.sendMessage(tab.id, { action: "updateSettings", settings: this.settings });
-        }
-      } catch (error) {
-        console.error("Update error:", error);
-      }
-    }, 100);
-  }
-
-  async toggleSubtitles() {
-    try {
-      const tab = await this.getActiveTab();
-      if (!tab?.url?.includes("youtube.com")) {
-        this.showStatus("Navigate to a YouTube video first", "error");
-        return;
-      }
-
-      const response = await this.sendMessage(tab.id, { action: "toggleSubtitles" });
-      if (response?.success) {
-        this.updateSubtitleToggle(response.enabled);
-      }
-    } catch (error) {
-      console.error("Toggle error:", error);
-      this.showStatus("Failed to toggle subtitles", "error");
-    }
-  }
-
-  updateSubtitleToggle(enabled) {
-    this.subtitleToggle.style.display = "block";
-    this.toggleSubtitlesBtn.textContent = enabled ? "Disable Subtitles" : "Enable Subtitles";
-    this.toggleSubtitlesBtn.className = `btn-toggle ${enabled ? "enabled" : "disabled"}`;
-  }
-
-  async sendMessage(tabId, message) {
-    try {
-      return await chrome.tabs.sendMessage(tabId, message);
-    } catch (error) {
-      if (error.message?.includes("Receiving end does not exist")) {
-        throw error;
-      }
-      console.error("Message error:", error);
-      return null;
-    }
-  }
-
-  showStatus(message, type) {
-    this.status.textContent = message;
-    this.status.className = `status ${type}`;
-    this.status.style.display = "block";
-  }
-
-  clearStatus() {
-    this.status.style.display = "none";
-  }
-
-  async checkAutoLoad() {
-    try {
-      const config = await this.fetchConfig();
-      if (!config?.videoMappings) return;
-
-      const tab = await this.getActiveTab();
-      if (!tab?.url?.includes("youtube.com/watch")) return;
-
-      const videoId = new URLSearchParams(new URL(tab.url).search).get("v");
-      if (videoId && config.videoMappings[videoId]) {
-        this.showStatus("Auto-loading subtitles...", "info");
-        const response = await fetch(config.videoMappings[videoId]);
-        if (response.ok) {
-          const content = await response.text();
-          if (content.includes("-->")) {
-            this.srtContent = content;
-            this.selectedFile = null;
-            this.loadBtn.disabled = false;
-            this.dropArea.querySelector(".drop-zone-text").textContent = "Auto-loaded SRT";
-            this.urlInput.value = config.videoMappings[videoId];
-            this.fetchBtn.disabled = false;
-            this.showStatus("Subtitles auto-loaded!", "success");
-          }
-        }
-      }
-    } catch (error) {
-      console.error("Auto-load error:", error);
-    }
-  }
-
-  async fetchConfig() {
-    try {
-      const response = await fetch(chrome.runtime.getURL("config.json"));
-      return response.ok ? await response.json() : null;
-    } catch (error) {
-      return null;
-    }
+    } catch (_) {}
   }
 }
 

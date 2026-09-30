@@ -1,19 +1,24 @@
 {
   "manifest_version": 3,
   "name": "Subly - YouTube Subtitle Injector",
-  "version": "1.0",
-  "description": "Inject SRT subtitles into YouTube Videos!",
-  "permissions": ["activeTab", "storage"],
+  "version": "2.0.3",
+  "description": "Inject & sync custom SRT and WebVTT subtitles directly into YouTube videos with drag-and-drop, live styling, and timing adjustments!",
+  "permissions": ["activeTab", "storage", "tabs", "scripting"],
+  "host_permissions": [
+    "*://*.youtube.com/*",
+    "https://*/*",
+    "http://*/*"
+  ],
   "content_scripts": [
     {
-      "matches": ["*://www.youtube.com/watch*"],
+      "matches": ["*://*.youtube.com/*"],
       "js": ["srt-parser.js", "content.js"],
       "run_at": "document_idle"
     }
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Subly"
+    "default_title": "Subly - YouTube Subtitle Injector"
   },
   "icons": {
     "16": "icons/icon16.png",
@@ -22,8 +27,8 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["config.json"],
-      "matches": ["<all_urls>"]
+      "resources": ["config.json", "icons/*"],
+      "matches": ["*://*.youtube.com/*"]
     }
   ]
 }

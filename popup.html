@@ -1,21 +1,30 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Subly - YouTube Subtitle Injector</title>
   <style>
     :root {
-      --bg: #14161c;
-      --surface: #1d2029;
-      --surface-2: #262a36;
-      --border: #333846;
-      --text: #e8eaf0;
-      --muted: #9aa1b2;
+      --bg: #13151c;
+      --surface: #1c1f2a;
+      --surface-2: #252937;
+      --surface-hover: #2e3345;
+      --border: #323747;
+      --border-light: #444b60;
+      --text: #f0f2f8;
+      --muted: #9aa2b5;
       --accent: #ff4757;
-      --accent-hover: #ff6b78;
+      --accent-hover: #ff6372;
+      --accent-dim: rgba(255, 71, 87, 0.15);
       --ok: #2ed573;
+      --ok-dim: rgba(46, 213, 115, 0.15);
+      --warn: #ffa502;
       --err: #ff5252;
-      --info: #4aa3ff;
-      radius: 10px;
+      --info: #378ffb;
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 14px;
     }
 
     * {
@@ -29,15 +38,15 @@
     }
 
     body {
-      width: 340px;
-      height: 560px;
-      min-width: 300px;
-      min-height: 380px;
+      width: 360px;
+      height: 590px;
+      min-width: 340px;
+      min-height: 480px;
       max-width: 800px;
-      max-height: 600px;
+      max-height: 700px;
       display: flex;
       flex-direction: column;
-      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
       background: var(--bg);
       color: var(--text);
       user-select: none;
@@ -45,124 +54,303 @@
       overflow: hidden;
     }
 
-    .scroll-area {
-      flex: 1;
-      overflow-y: auto;
-      padding: 16px 16px 8px;
-    }
-
-    .scroll-area::-webkit-scrollbar {
-      width: 8px;
-    }
-
-    .scroll-area::-webkit-scrollbar-thumb {
-      background: var(--border);
-      border-radius: 4px;
-    }
-
+    /* Header */
     .header {
       display: flex;
       align-items: center;
       gap: 10px;
-      padding: 14px 16px;
+      padding: 12px 16px;
       background: linear-gradient(135deg, #ff4757 0%, #d63031 100%);
       flex-shrink: 0;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+    }
+
+    .logo-container {
+      display: flex;
+      align-items: center;
+      gap: 10px;
     }
 
     .logo {
-      width: 30px;
-      height: 30px;
-      border-radius: 8px;
-      background: rgba(255, 255, 255, 0.92);
+      width: 28px;
+      height: 28px;
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.95);
       padding: 3px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+    }
+
+    .title-group {
+      display: flex;
+      flex-direction: column;
     }
 
     .title {
-      font-size: 19px;
-      font-weight: 700;
-      color: #fff;
+      font-size: 17px;
+      font-weight: 800;
+      color: #ffffff;
       letter-spacing: 0.5px;
+      line-height: 1.2;
     }
 
-    .version-badge {
-      margin-left: auto;
-      background: rgba(0, 0, 0, 0.25);
-      color: rgba(255, 255, 255, 0.9);
-      font-size: 11px;
+    .version-tag {
+      font-size: 10px;
       font-weight: 600;
-      padding: 3px 8px;
-      border-radius: 20px;
+      color: rgba(255, 255, 255, 0.85);
     }
 
+    .header-actions {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .power-btn {
+      background: rgba(255, 255, 255, 0.2);
+      border: none;
+      border-radius: 20px;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      transition: all 0.2s;
+    }
+
+    .power-btn.active {
+      background: #2ed573;
+      color: #0b2e18;
+      box-shadow: 0 0 8px rgba(46, 213, 115, 0.5);
+    }
+
+    .power-btn.inactive {
+      background: rgba(0, 0, 0, 0.35);
+      color: #ff7675;
+    }
+
+    /* Tabs Bar */
+    .tabs-bar {
+      display: flex;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 4px 10px;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+
+    .tab-btn {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 8px 4px;
+      background: transparent;
+      border: none;
+      border-radius: var(--radius-sm);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .tab-btn:hover {
+      color: var(--text);
+      background: var(--surface-2);
+    }
+
+    .tab-btn.active {
+      color: var(--accent);
+      background: var(--accent-dim);
+      font-weight: 700;
+    }
+
+    .tab-icon {
+      font-size: 14px;
+    }
+
+    /* Scrollable Container */
+    .scroll-area {
+      flex: 1;
+      overflow-y: auto;
+      padding: 14px;
+    }
+
+    .scroll-area::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .scroll-area::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 3px;
+    }
+
+    .tab-content {
+      display: none;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+
+    /* Card */
     .card {
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: var(--radius-md);
       padding: 14px;
       margin-bottom: 12px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
     }
 
     .card-title {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      font-size: 13px;
+      font-size: 11.5px;
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.8px;
       color: var(--muted);
-      margin-bottom: 12px;
+      margin-bottom: 10px;
     }
 
+    /* Drag & Drop Zone */
     .drop-zone {
       border: 2px dashed var(--border);
-      border-radius: 8px;
-      padding: 18px 12px;
+      border-radius: var(--radius-md);
+      padding: 20px 14px;
       text-align: center;
       cursor: pointer;
-      transition: border-color 0.2s, background 0.2s;
-      background: rgba(255, 255, 255, 0.02);
+      transition: all 0.2s;
+      background: rgba(255, 255, 255, 0.015);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
     }
 
     .drop-zone:hover, .drop-zone.dragover {
       border-color: var(--accent);
-      background: rgba(255, 71, 87, 0.08);
+      background: var(--accent-dim);
+      transform: scale(0.99);
     }
 
-    .drop-zone-text {
-      color: var(--muted);
+    .drop-zone-icon {
+      font-size: 28px;
+    }
+
+    .drop-zone-primary {
       font-size: 13px;
-      word-break: break-all;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .drop-zone-sub {
+      font-size: 11px;
+      color: var(--muted);
     }
 
     #fileInput {
       display: none;
     }
 
+    /* Loaded Subtitle Info Card */
+    .loaded-card {
+      background: var(--surface-2);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-md);
+      padding: 12px;
+      margin-bottom: 12px;
+      display: none;
+    }
+
+    .loaded-card.visible {
+      display: block;
+    }
+
+    .loaded-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .loaded-name {
+      font-size: 13px;
+      font-weight: 700;
+      color: #ffffff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 220px;
+    }
+
+    .loaded-badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 12px;
+      background: var(--ok-dim);
+      color: var(--ok);
+    }
+
+    .loaded-meta {
+      font-size: 11.5px;
+      color: var(--muted);
+      display: flex;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .loaded-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .btn-unload {
+      flex: 1;
+      padding: 6px 10px;
+      background: rgba(255, 82, 82, 0.12);
+      border: 1px solid rgba(255, 82, 82, 0.3);
+      color: var(--err);
+      border-radius: var(--radius-sm);
+      font-size: 11.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn-unload:hover {
+      background: rgba(255, 82, 82, 0.25);
+    }
+
+    /* URL Fetch */
     .url-row {
       display: flex;
       gap: 8px;
       margin-top: 10px;
     }
 
-    input[type="text"] {
+    input[type="text"], input[type="number"] {
       flex: 1;
       min-width: 0;
       padding: 8px 10px;
       border: 1px solid var(--border);
-      border-radius: 6px;
-      font-size: 13px;
+      border-radius: var(--radius-sm);
+      font-size: 12.5px;
       background: var(--surface-2);
       color: var(--text);
       user-select: text;
       -webkit-user-select: text;
     }
 
-    input[type="text"]::placeholder {
-      color: #6b7280;
-    }
-
-    input[type="text"]:focus {
+    input[type="text"]:focus, input[type="number"]:focus {
       outline: none;
       border-color: var(--accent);
     }
@@ -170,11 +358,15 @@
     .btn {
       padding: 8px 14px;
       border: none;
-      border-radius: 6px;
-      font-size: 13px;
+      border-radius: var(--radius-sm);
+      font-size: 12.5px;
       font-weight: 600;
       cursor: pointer;
       transition: background 0.2s, transform 0.1s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
     }
 
     .btn:active:not(:disabled) {
@@ -182,9 +374,10 @@
     }
 
     .btn:disabled {
-      background: #3a3f4d !important;
-      color: #7a8091 !important;
+      background: #2b303d !important;
+      color: #636b7e !important;
       cursor: not-allowed;
+      border-color: transparent !important;
     }
 
     .btn-fetch {
@@ -200,68 +393,229 @@
 
     .btn-load {
       width: 100%;
-      padding: 11px;
+      padding: 10px;
       margin-top: 10px;
       background: var(--accent);
       color: white;
-      font-size: 14px;
+      font-size: 13.5px;
+      font-weight: 700;
     }
 
     .btn-load:hover:not(:disabled) {
       background: var(--accent-hover);
     }
 
+    /* Notification / Status Banner */
     .status {
       margin-top: 10px;
-      padding: 9px;
-      border-radius: 6px;
-      font-size: 12.5px;
+      padding: 8px 12px;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
       text-align: center;
       display: none;
+      animation: fadeIn 0.2s ease;
     }
 
-    .status.success { background: rgba(46, 213, 115, 0.15); color: var(--ok); }
+    .status.success { background: var(--ok-dim); color: var(--ok); }
     .status.error { background: rgba(255, 82, 82, 0.15); color: var(--err); }
-    .status.info { background: rgba(74, 163, 255, 0.15); color: var(--info); }
+    .status.info { background: rgba(55, 143, 251, 0.15); color: var(--info); }
 
-    .btn-settings {
-      background: var(--surface-2);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 4px 9px;
-      cursor: pointer;
-      font-size: 14px;
-      line-height: 1;
-      color: var(--text);
-      transition: transform 0.2s;
-    }
-
-    .btn-settings.open {
-      transform: rotate(90deg);
-    }
-
-    .settings-panel {
+    /* Preset Notice */
+    .notice-card {
+      background: rgba(55, 143, 251, 0.1);
+      border: 1px solid rgba(55, 143, 251, 0.3);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      font-size: 12px;
+      color: #d1e5ff;
+      margin-top: 10px;
       display: none;
     }
 
-    .settings-panel.visible {
-      display: block;
+    .notice-card.visible {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .notice-btn {
+      background: var(--info);
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      padding: 4px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    /* TAB 2: SYNC CONTROLS */
+    .sync-display-box {
+      text-align: center;
+      padding: 16px 10px;
+      background: var(--surface-2);
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border);
+      margin-bottom: 14px;
+    }
+
+    .sync-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+
+    .sync-value {
+      font-size: 32px;
+      font-weight: 800;
+      font-family: 'Consolas', 'Courier New', monospace;
+      color: var(--ok);
+      letter-spacing: 1px;
+    }
+
+    .sync-value.negative {
+      color: var(--warn);
+    }
+
+    .sync-btn-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    .sync-btn {
+      padding: 9px 4px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .sync-btn:hover {
+      border-color: var(--accent);
+      color: #ffffff;
+      background: var(--surface-hover);
+    }
+
+    .sync-btn.reset {
+      grid-column: span 3;
+      background: var(--accent-dim);
+      border-color: var(--accent);
+      color: var(--accent);
+      padding: 8px;
+    }
+
+    .sync-btn.reset:hover {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .shortcut-hints {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 10px;
+      font-size: 11.5px;
+      color: var(--muted);
+    }
+
+    .shortcut-hints p {
+      margin-bottom: 5px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .shortcut-hints p:last-child {
+      margin-bottom: 0;
+    }
+
+    .kbd {
+      background: var(--surface-2);
+      border: 1px solid var(--border-light);
+      border-radius: 4px;
+      padding: 1px 6px;
+      color: #fff;
+      font-family: monospace;
+      font-size: 10.5px;
+      font-weight: 600;
+    }
+
+    /* TAB 3: STYLING & PREVIEW */
+    .preview-container {
+      position: relative;
+      width: 100%;
+      height: 100px;
+      background: linear-gradient(135deg, #182848 0%, #2980b9 100%);
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border);
+      overflow: hidden;
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.6);
+    }
+
+    .preview-badge {
+      position: absolute;
+      top: 6px;
+      left: 8px;
+      font-size: 9.5px;
+      font-weight: 700;
+      color: rgba(255, 255, 255, 0.6);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .preview-subtitle {
+      max-width: 90%;
+      padding: 4px 10px;
+      border-radius: 4px;
+      text-align: center;
+      line-height: 1.3;
+      transition: all 0.15s ease;
+      white-space: pre-wrap;
     }
 
     .setting-row {
-      margin-bottom: 14px;
+      margin-bottom: 12px;
     }
 
     .setting-row:last-child {
       margin-bottom: 0;
     }
 
-    .setting-row label {
-      display: block;
+    .setting-label-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
       margin-bottom: 6px;
+    }
+
+    .setting-label-row label {
       color: var(--muted);
-      font-size: 12.5px;
-      font-weight: 500;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .setting-val-tag {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--accent);
+      background: var(--surface-2);
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-family: monospace;
     }
 
     .setting-control {
@@ -276,23 +630,12 @@
       cursor: pointer;
     }
 
-    .setting-value {
-      min-width: 44px;
-      text-align: center;
-      font-weight: 700;
-      font-size: 13px;
-      color: var(--accent);
-      background: var(--surface-2);
-      border-radius: 5px;
-      padding: 3px 4px;
-    }
-
     select {
       width: 100%;
-      padding: 8px 10px;
+      padding: 7px 10px;
       border: 1px solid var(--border);
-      border-radius: 6px;
-      font-size: 13px;
+      border-radius: var(--radius-sm);
+      font-size: 12.5px;
       background: var(--surface-2);
       color: var(--text);
       cursor: pointer;
@@ -303,46 +646,120 @@
       border-color: var(--accent);
     }
 
+    .color-picker-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
     input[type="color"] {
-      width: 100%;
-      height: 34px;
-      padding: 3px;
+      width: 44px;
+      height: 32px;
+      padding: 2px;
       border: 1px solid var(--border);
-      border-radius: 6px;
+      border-radius: var(--radius-sm);
       background: var(--surface-2);
       cursor: pointer;
     }
 
-    .subtitle-toggle {
-      margin-top: 14px;
-      padding-top: 14px;
-      border-top: 1px solid var(--border);
-      text-align: center;
-      display: none;
+    .swatches {
+      display: flex;
+      gap: 6px;
     }
 
-    .btn-toggle {
-      width: 100%;
-      padding: 9px;
-      border: none;
-      border-radius: 6px;
-      font-size: 13px;
-      font-weight: 700;
+    .swatch {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: 2px solid transparent;
       cursor: pointer;
-      color: white;
-      transition: background 0.2s;
+      transition: transform 0.15s, border-color 0.15s;
     }
 
-    .btn-toggle.enabled { background: var(--ok); }
-    .btn-toggle.enabled:hover { background: #27ae60; }
-    .btn-toggle.disabled { background: #ff7675; }
-    .btn-toggle.disabled:hover { background: #ff6b6b; }
+    .swatch:hover {
+      transform: scale(1.15);
+      border-color: #fff;
+    }
 
-    .footer {
-      text-align: center;
-      color: var(--muted);
+    /* TAB 4: SEARCH & CUES */
+    .search-box {
+      margin-bottom: 10px;
+    }
+
+    .cues-list {
+      max-height: 360px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding-right: 4px;
+    }
+
+    .cues-list::-webkit-scrollbar {
+      width: 5px;
+    }
+
+    .cues-list::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 3px;
+    }
+
+    .cue-item {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 8px 10px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    .cue-item:hover {
+      background: var(--surface-hover);
+      border-color: var(--accent);
+    }
+
+    .cue-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+
+    .cue-time {
       font-size: 11px;
-      padding: 6px 0 10px;
+      font-weight: 700;
+      color: var(--accent);
+      font-family: monospace;
+    }
+
+    .cue-idx {
+      font-size: 10px;
+      color: var(--muted);
+    }
+
+    .cue-text {
+      font-size: 12px;
+      color: var(--text);
+      line-height: 1.3;
+      word-break: break-word;
+    }
+
+    .no-cues {
+      text-align: center;
+      padding: 30px 10px;
+      color: var(--muted);
+      font-size: 12.5px;
+    }
+
+    /* Footer */
+    .footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 14px 8px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--muted);
       flex-shrink: 0;
     }
 
@@ -350,11 +767,10 @@
       position: absolute;
       right: 0;
       bottom: 0;
-      width: 18px;
-      height: 18px;
+      width: 16px;
+      height: 16px;
       cursor: nwse-resize;
-      flex-shrink: 0;
-      opacity: 0.5;
+      opacity: 0.6;
       touch-action: none;
     }
 
@@ -363,89 +779,272 @@
     .resizer::before {
       content: "";
       position: absolute;
-      right: 4px;
-      bottom: 4px;
-      width: 8px;
-      height: 8px;
+      right: 3px;
+      bottom: 3px;
+      width: 6px;
+      height: 6px;
       border-right: 2px solid var(--muted);
       border-bottom: 2px solid var(--muted);
-      border-radius: 1px;
     }
 
-    .resize-hint {
-      font-size: 10px;
-      color: #6b7280;
-      margin-left: 6px;
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
     }
   </style>
 </head>
 <body>
+  <!-- Header -->
   <div class="header">
-    <img src="icons/icon.png" alt="Subly" class="logo" />
-    <div class="title">Subly</div>
-    <div class="version-badge" id="versionDisplay">v1.0</div>
+    <div class="logo-container">
+      <img src="icons/icon.png" alt="Subly" class="logo" />
+      <div class="title-group">
+        <div class="title">Subly</div>
+        <div class="version-tag" id="versionDisplay">v2.0</div>
+      </div>
+    </div>
+    <div class="header-actions">
+      <button class="power-btn active" id="powerBtn" title="Toggle Subtitles (Alt+T)">
+        <span class="power-dot">●</span>
+        <span id="powerText">ON</span>
+      </button>
+    </div>
   </div>
 
+  <!-- Tabs Navigation -->
+  <div class="tabs-bar">
+    <button class="tab-btn active" data-tab="tab-load">
+      <span class="tab-icon">📁</span>
+      <span class="tab-label">Files</span>
+    </button>
+    <button class="tab-btn" data-tab="tab-sync">
+      <span class="tab-icon">⏱️</span>
+      <span class="tab-label">Sync</span>
+    </button>
+    <button class="tab-btn" data-tab="tab-style">
+      <span class="tab-icon">🎨</span>
+      <span class="tab-label">Styling</span>
+    </button>
+    <button class="tab-btn" data-tab="tab-search">
+      <span class="tab-icon">🔍</span>
+      <span class="tab-label">Dialogue</span>
+    </button>
+  </div>
+
+  <!-- Main Scrollable Area -->
   <div class="scroll-area">
-    <div class="card">
-      <div class="card-title">Subtitles</div>
-      <div class="drop-zone" id="dropArea">
-        <input type="file" id="fileInput" accept=".srt" />
-        <div class="drop-zone-text">Click or drag SRT file here</div>
+    <!-- TAB 1: LOAD SUBTITLES -->
+    <div class="tab-content active" id="tab-load">
+      <!-- Active Subtitle Card -->
+      <div class="loaded-card" id="loadedCard">
+        <div class="loaded-header">
+          <div class="loaded-name" id="loadedName">subtitles.srt</div>
+          <div class="loaded-badge">✓ Active</div>
+        </div>
+        <div class="loaded-meta">
+          <span id="loadedCuesCount">0 cues</span>
+          <span>•</span>
+          <span id="loadedOffset">Sync: 0.0s</span>
+        </div>
+        <div class="loaded-actions">
+          <button class="btn-unload" id="unloadBtn">🗑️ Unload Subtitles</button>
+        </div>
       </div>
-      <div class="url-row">
-        <input type="text" id="urlInput" placeholder="Or paste SRT URL" />
-        <button class="btn btn-fetch" id="fetchBtn" disabled>Fetch</button>
+
+      <!-- File Picker & Drop Zone -->
+      <div class="card">
+        <div class="card-title">Load Subtitles</div>
+        <div class="drop-zone" id="dropArea">
+          <input type="file" id="fileInput" accept=".srt,.vtt,.txt" />
+          <div class="drop-zone-icon">📥</div>
+          <div class="drop-zone-primary" id="dropPrimary">Click or drag subtitle file here</div>
+          <div class="drop-zone-sub">Supports .SRT, .VTT, .TXT (or drop directly onto video)</div>
+        </div>
+
+        <div class="url-row">
+          <input type="text" id="urlInput" placeholder="Or paste subtitle URL (.srt, .vtt)" />
+          <button class="btn btn-fetch" id="fetchBtn" disabled>Fetch</button>
+        </div>
+
+        <button class="btn btn-load" id="loadBtn" disabled>🚀 Inject Subtitles</button>
+
+        <div class="status" id="status"></div>
+
+        <div class="notice-card" id="presetNotice">
+          <span id="presetText">Preset subtitles available for this video!</span>
+          <button class="notice-btn" id="loadPresetBtn">Load Now</button>
+        </div>
       </div>
-      <button class="btn btn-load" id="loadBtn" disabled>Load Subtitles</button>
-      <div class="status" id="status"></div>
     </div>
 
-    <div class="card">
-      <div class="card-title">
-        <span>Caption Settings</span>
-        <button class="btn-settings" id="toggleSettings" title="Show/hide settings">&#9881;&#65039;</button>
+    <!-- TAB 2: TIME SYNC -->
+    <div class="tab-content" id="tab-sync">
+      <div class="card">
+        <div class="sync-display-box">
+          <div class="sync-label">Current Timing Offset</div>
+          <div class="sync-value" id="syncValue">+0.00s</div>
+        </div>
+
+        <div class="sync-btn-grid">
+          <button class="sync-btn" data-delta="-1.0">-1.0s</button>
+          <button class="sync-btn" data-delta="-0.5">-0.5s</button>
+          <button class="sync-btn" data-delta="-0.2">-0.2s</button>
+          <button class="sync-btn" data-delta="0.2">+0.2s</button>
+          <button class="sync-btn" data-delta="0.5">+0.5s</button>
+          <button class="sync-btn" data-delta="1.0">+1.0s</button>
+          <button class="sync-btn reset" id="syncResetBtn">↺ Reset Offset to 0.0s</button>
+        </div>
+
+        <div class="shortcut-hints">
+          <p><span>Advance earlier:</span> <span class="kbd">Alt + [</span></p>
+          <p><span>Delay later:</span> <span class="kbd">Alt + ]</span></p>
+          <p><span>Reset offset:</span> <span class="kbd">Alt + \</span></p>
+          <p><span>Toggle on/off:</span> <span class="kbd">Alt + T</span></p>
+        </div>
       </div>
-      <div class="settings-panel" id="settingsPanel">
-        <div class="setting-row">
-          <label>Font Size</label>
-          <div class="setting-control">
-            <input type="range" id="fontSizeRange" min="12" max="64" step="2" />
-            <span class="setting-value" id="fontSize">18px</span>
+    </div>
+
+    <!-- TAB 3: STYLING & LIVE PREVIEW -->
+    <div class="tab-content" id="tab-style">
+      <div class="card">
+        <!-- Live Preview Screen -->
+        <div class="preview-container">
+          <div class="preview-badge">Live Preview</div>
+          <div class="preview-subtitle" id="previewSubtitle">
+            Subly Subtitle Live Preview<br>Custom captions for YouTube
           </div>
         </div>
+
+        <!-- Font Size -->
         <div class="setting-row">
-          <label>Position</label>
-          <select id="position">
-            <option value="bottom">Bottom</option>
-            <option value="top">Top</option>
-            <option value="middle">Middle</option>
+          <div class="setting-label-row">
+            <label>Font Size</label>
+            <span class="setting-val-tag" id="fontSizeVal">18px</span>
+          </div>
+          <div class="setting-control">
+            <input type="range" id="fontSizeRange" min="12" max="54" step="1" value="18" />
+          </div>
+        </div>
+
+        <!-- Font Family -->
+        <div class="setting-row">
+          <div class="setting-label-row">
+            <label>Font Family</label>
+          </div>
+          <select id="fontFamily">
+            <option value="'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif">Segoe UI / Roboto (Modern)</option>
+            <option value="Arial, sans-serif">Arial (Standard)</option>
+            <option value="'Trebuchet MS', sans-serif">Trebuchet MS (Crisp)</option>
+            <option value="Verdana, sans-serif">Verdana (Clean)</option>
+            <option value="'Courier New', monospace">Courier New (Monospace)</option>
+            <option value="Impact, sans-serif">Impact (Bold)</option>
           </select>
         </div>
+
+        <!-- Position -->
         <div class="setting-row">
-          <label>Background Opacity</label>
+          <div class="setting-label-row">
+            <label>Position</label>
+          </div>
+          <select id="position">
+            <option value="bottom">Bottom</option>
+            <option value="lowerThird">Lower Third</option>
+            <option value="middle">Middle</option>
+            <option value="top">Top</option>
+          </select>
+        </div>
+
+        <!-- Vertical Offset -->
+        <div class="setting-row">
+          <div class="setting-label-row">
+            <label>Margin Offset (Top/Bottom)</label>
+            <span class="setting-val-tag" id="vertOffsetVal">60px</span>
+          </div>
           <div class="setting-control">
-            <input type="range" id="opacityRange" min="0" max="100" step="10" />
-            <span class="setting-value" id="opacity">80%</span>
+            <input type="range" id="vertOffsetRange" min="20" max="150" step="5" value="60" />
           </div>
         </div>
+
+        <!-- Text Shadow / Outline -->
         <div class="setting-row">
-          <label>Text Color</label>
-          <input type="color" id="textColor" value="#ffffff" />
+          <div class="setting-label-row">
+            <label>Text Outline / Shadow</label>
+          </div>
+          <select id="textShadow">
+            <option value="outline">Heavy Outline (Recommended)</option>
+            <option value="subtle">Subtle Shadow</option>
+            <option value="glow">Subly Glow</option>
+            <option value="none">None</option>
+          </select>
         </div>
-      </div>
-      <div class="subtitle-toggle" id="subtitleToggle">
-        <button class="btn-toggle enabled" id="toggleSubtitlesBtn">Disable Subtitles</button>
+
+        <!-- Background Opacity -->
+        <div class="setting-row">
+          <div class="setting-label-row">
+            <label>Background Opacity</label>
+            <span class="setting-val-tag" id="opacityVal">80%</span>
+          </div>
+          <div class="setting-control">
+            <input type="range" id="opacityRange" min="0" max="100" step="5" value="80" />
+          </div>
+        </div>
+
+        <!-- Text Color -->
+        <div class="setting-row">
+          <div class="setting-label-row">
+            <label>Text Color</label>
+          </div>
+          <div class="color-picker-group">
+            <input type="color" id="textColor" value="#ffffff" />
+            <div class="swatches">
+              <span class="swatch" style="background:#ffffff;" data-color="#ffffff" title="White"></span>
+              <span class="swatch" style="background:#ffe600;" data-color="#ffe600" title="Yellow"></span>
+              <span class="swatch" style="background:#00e5ff;" data-color="#00e5ff" title="Cyan"></span>
+              <span class="swatch" style="background:#76ff03;" data-color="#76ff03" title="Green"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Background Color -->
+        <div class="setting-row">
+          <div class="setting-label-row">
+            <label>Background Color</label>
+          </div>
+          <div class="color-picker-group">
+            <input type="color" id="bgColor" value="#000000" />
+            <div class="swatches">
+              <span class="swatch" style="background:#000000;" data-bg="#000000" title="Black"></span>
+              <span class="swatch" style="background:#1a1e28;" data-bg="#1a1e28" title="Navy"></span>
+              <span class="swatch" style="background:#2d112b;" data-bg="#2d112b" title="Wine"></span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
-    <div class="footer">
-      Subly<span class="resize-hint" id="sizeHint"></span>
+    <!-- TAB 4: SEARCH CUES & JUMP -->
+    <div class="tab-content" id="tab-search">
+      <div class="card">
+        <div class="search-box">
+          <input type="text" id="cueSearchInput" placeholder="Search dialogue in video..." />
+        </div>
+        <div class="cues-list" id="cuesList">
+          <div class="no-cues">No subtitles loaded yet. Please load a subtitle file in Files tab!</div>
+        </div>
+      </div>
     </div>
   </div>
 
+  <!-- Footer -->
+  <div class="footer">
+    <span>Subly 2.0 • YouTube Injector</span>
+    <span id="sizeHint" style="font-size:10px; color:#6b7280;"></span>
+  </div>
+
+  <!-- Resizer Handle -->
   <div class="resizer" id="resizer" title="Drag to resize"></div>
 
+  <script src="srt-parser.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>
