@@ -2,7 +2,12 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <style>    body {
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
       width: 280px;
       padding: 16px;
       font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -10,7 +15,11 @@
       border-radius: 12px;
       box-shadow: 0 6px 24px rgba(231, 60, 60, 0.3);
       margin: 0;
-    }      .title {
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    .title {
       font-size: 24px;
       font-weight: 700;
       margin-bottom: 16px;
@@ -19,47 +28,51 @@
       text-shadow: 0 2px 4px rgba(0,0,0,0.2);
       letter-spacing: -0.5px;
     }
-      .card {
+
+    .card {
       background: rgba(255, 255, 255, 0.95);
-      backdrop-filter: blur(10px);
       border-radius: 10px;
       padding: 16px;
       margin-bottom: 12px;
       box-shadow: 0 4px 16px rgba(0,0,0,0.1);
       border: 1px solid rgba(255, 255, 255, 0.2);
+      contain: layout style;
     }
-      .file-input-container {
+
+    .file-input-container {
       border: 2px dashed #ff4444;
       border-radius: 10px;
       padding: 18px;
       text-align: center;
       cursor: pointer;
-      transition: all 0.3s ease;
+      transition: border-color 0.3s ease, background-color 0.3s ease, transform 0.3s ease;
       background: rgba(255, 68, 68, 0.05);
+      will-change: transform;
     }
-    
+
     .file-input-container:hover {
       border-color: #e73c3c;
       background: rgba(255, 68, 68, 0.1);
       transform: translateY(-2px);
     }
-    
+
     .file-input-container.dragover {
       border-color: #e73c3c;
       background: rgba(255, 68, 68, 0.15);
       transform: scale(1.02);
     }
-    
+
     #fileInput {
       display: none;
     }
-    
+
     .file-label {
       color: #666;
       font-size: 14px;
       font-weight: 500;
     }
-      .load-btn {
+
+    .load-btn {
       background: linear-gradient(135deg, #ff4444 0%, #e73c3c 100%);
       color: white;
       border: none;
@@ -69,59 +82,77 @@
       width: 100%;
       font-size: 14px;
       font-weight: 600;
-      transition: all 0.3s ease;
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
       box-shadow: 0 3px 10px rgba(255, 68, 68, 0.3);
+      will-change: transform;
     }
-    
+
     .load-btn:hover {
       transform: translateY(-2px);
       box-shadow: 0 6px 20px rgba(255, 68, 68, 0.4);
     }
-    
+
+    .load-btn:active {
+      transform: translateY(0);
+    }
+
     .load-btn:disabled {
       background: #ccc;
       cursor: not-allowed;
       transform: none;
       box-shadow: none;
     }
-      .status {
+
+    .status {
       margin-top: 10px;
       padding: 10px;
       border-radius: 7px;
       font-size: 13px;
       font-weight: 500;
     }
-    
+
     .status.success {
       background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
       color: white;
       box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
     }
-    
+
     .status.error {
       background: linear-gradient(135deg, #ff6b6b 0%, #ee5a5a 100%);
       color: white;
       box-shadow: 0 4px 12px rgba(255, 107, 107, 0.3);
-    }    .url-input-container {
+    }
+
+    .status.info {
+      background: linear-gradient(135deg, #2196F3 0%, #1976D2 100%);
+      color: white;
+      box-shadow: 0 4px 12px rgba(33, 150, 243, 0.3);
+    }
+
+    .url-input-container {
       margin: 12px 0;
       display: flex;
       gap: 8px;
-    }    #urlInput {
+    }
+
+    #urlInput {
       flex-grow: 1;
       padding: 10px;
       border: 2px solid #e0e0e0;
       border-radius: 7px;
       font-size: 13px;
-      transition: border-color 0.3s ease;
+      transition: border-color 0.3s ease, box-shadow 0.3s ease;
       background: white;
+      user-select: text;
+      -webkit-user-select: text;
     }
 
     #urlInput:focus {
       outline: none;
       border-color: #ff4444;
       box-shadow: 0 0 0 3px rgba(255, 68, 68, 0.1);
-    }    
-    
+    }
+
     .fetch-btn {
       background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
       color: white;
@@ -131,13 +162,18 @@
       cursor: pointer;
       font-size: 13px;
       font-weight: 600;
-      transition: all 0.3s ease;
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
       box-shadow: 0 3px 10px rgba(76, 175, 80, 0.3);
+      will-change: transform;
     }
 
     .fetch-btn:hover {
       transform: translateY(-2px);
       box-shadow: 0 6px 20px rgba(76, 175, 80, 0.4);
+    }
+
+    .fetch-btn:active {
+      transform: translateY(0);
     }
 
     .fetch-btn:disabled {
@@ -156,7 +192,9 @@
       justify-content: space-between;
       align-items: center;
       margin-bottom: 12px;
-    }    .settings-header h3 {
+    }
+
+    .settings-header h3 {
       margin: 0;
       font-size: 16px;
       color: #333;
@@ -170,13 +208,16 @@
       font-size: 18px;
       cursor: pointer;
       padding: 8px 12px;
-      transition: all 0.3s ease;
+      transition: background-color 0.3s ease, transform 0.3s ease;
+      will-change: transform;
     }
 
     .toggle-settings:hover {
       background: rgba(255, 68, 68, 0.2);
       transform: rotate(90deg);
-    }    .settings-panel {
+    }
+
+    .settings-panel {
       display: none;
       background: rgba(255, 68, 68, 0.05);
       border-radius: 10px;
@@ -199,7 +240,9 @@
         opacity: 1;
         transform: translateY(0);
       }
-    }    .setting-group {
+    }
+
+    .setting-group {
       margin-bottom: 12px;
     }
 
@@ -213,11 +256,15 @@
       color: #555;
       font-size: 13px;
       font-weight: 600;
-    }    .setting-control {
+    }
+
+    .setting-control {
       display: flex;
       align-items: center;
       gap: 10px;
-    }.setting-btn {
+    }
+
+    .setting-btn {
       background: white;
       border: 2px solid #ff4444;
       border-radius: 5px;
@@ -226,36 +273,46 @@
       font-size: 13px;
       font-weight: 600;
       color: #ff4444;
-      transition: all 0.3s ease;
+      transition: background-color 0.3s ease, color 0.3s ease, transform 0.3s ease;
       min-width: 32px;
+      will-change: transform;
     }
 
     .setting-btn:hover {
       background: #ff4444;
       color: white;
       transform: scale(1.05);
-    }    .setting-select {
+    }
+
+    .setting-btn:active {
+      transform: scale(0.95);
+    }
+
+    .setting-select {
       width: 100%;
       padding: 8px;
       border: 2px solid #e0e0e0;
       border-radius: 7px;
       font-size: 13px;
       background: white;
-      transition: border-color 0.3s ease;
+      transition: border-color 0.3s ease, box-shadow 0.3s ease;
     }
 
     .setting-select:focus {
       outline: none;
       border-color: #ff4444;
       box-shadow: 0 0 0 3px rgba(255, 68, 68, 0.1);
-    }    .color-picker {
+    }
+
+    .color-picker {
       width: 100%;
       height: 36px;
       padding: 0;
       border: 2px solid #e0e0e0;
       border-radius: 7px;
       cursor: pointer;
-      transition: all 0.3s ease;
+      transition: border-color 0.3s ease, transform 0.3s ease;
+      will-change: transform;
     }
 
     .color-picker:hover {
@@ -268,11 +325,13 @@
       font-size: 11px;
       margin-left: 4px;
       font-weight: 500;
-    }    .subtitle-status {
+    }
+
+    .subtitle-status {
       border: 2px solid #ddd;
       background: rgba(255, 255, 255, 0.9);
       border-radius: 10px;
-      transition: all 0.3s ease;
+      transition: border-color 0.3s ease, background-color 0.3s ease;
     }
 
     .subtitle-status.enabled {
@@ -293,8 +352,9 @@
       cursor: pointer;
       font-size: 12px;
       font-weight: 600;
-      transition: all 0.3s ease;
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
       box-shadow: 0 2px 8px rgba(76, 175, 80, 0.3);
+      will-change: transform;
     }
 
     .toggle-subtitles-btn:hover {
@@ -302,15 +362,23 @@
       box-shadow: 0 4px 12px rgba(76, 175, 80, 0.4);
     }
 
+    .toggle-subtitles-btn:active {
+      transform: translateY(0);
+    }
+
     .toggle-subtitles-btn.disabled {
       background: linear-gradient(135deg, #ff5722 0%, #e64a19 100%);
       box-shadow: 0 2px 8px rgba(255, 87, 34, 0.3);
-    }    #fontSize, #opacity {
+    }
+
+    #fontSize, #opacity {
       color: #ff4444;
       font-weight: 600;
       min-width: 20px;
       text-align: center;
-    }    .header-container {
+    }
+
+    .header-container {
       display: flex;
       align-items: center;
       justify-content: center;
@@ -325,22 +393,27 @@
       background: rgba(255, 255, 255, 0.95);
       padding: 6px;
       box-shadow: 0 3px 12px rgba(0, 0, 0, 0.15);
-      transition: all 0.3s ease;
+      transition: transform 0.3s ease, background-color 0.3s ease, box-shadow 0.3s ease;
       flex-shrink: 0;
+      will-change: transform;
     }
 
     .logo:hover {
       transform: scale(1.05);
       background: rgba(255, 255, 255, 1);
       box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
-    }    .title {
+    }
+
+    .title {
       font-size: 24px;
       font-weight: 700;
       color: white;
       text-shadow: 0 2px 4px rgba(0,0,0,0.2);
       letter-spacing: -0.5px;
       margin: 0;
-    }    .footer {
+    }
+
+    .footer {
       text-align: center;
       margin-top: 12px;
       padding: 10px 0;
@@ -356,16 +429,17 @@
     }
   </style>
 </head>
-<body>  <div class="header-container">
+<body>
+  <div class="header-container">
     <img src="icons/icon.png" alt="Subly Logo" class="logo" />
     <div class="title">Subly</div>
   </div>
-  
+
   <div class="card">
     <div class="file-input-container" id="dropArea">
       <input type="file" id="fileInput" accept=".srt" />
       <div class="file-label">
-        📁 Click here or drag & drop your SRT file
+        Click here or drag & drop your SRT file
       </div>
     </div>
 
@@ -373,11 +447,11 @@
       <input type="text" id="urlInput" placeholder="Or paste SRT file URL here" />
       <button class="fetch-btn" id="fetchBtn">Fetch</button>
     </div>
-    
+
     <button class="load-btn" id="loadBtn" disabled>Load Subtitles</button>
 
     <div class="subtitle-status" id="subtitleStatus" style="margin: 15px 0; padding: 12px; text-align: center; display: none;">
-      <div class="status-text" id="statusText">✅ Subtitles loaded</div>
+      <div class="status-text" id="statusText">Subtitles loaded</div>
       <button class="toggle-subtitles-btn" id="toggleSubtitlesBtn" style="margin-top: 10px; padding: 8px 16px;">
         Disable (Alt+T)
       </button>
@@ -388,16 +462,16 @@
     <div class="settings-container">
       <div class="settings-header">
         <h3>Caption Settings</h3>
-        <button class="toggle-settings" id="toggleSettings">⚙️</button>
+        <button class="toggle-settings" id="toggleSettings" aria-label="Toggle settings">⚙️</button>
       </div>
-      
+
       <div class="settings-panel" id="settingsPanel">
         <div class="setting-group">
           <label>Font Size <span class="keyboard-shortcut">(Alt + Up/Down)</span></label>
           <div class="setting-control">
-            <button class="setting-btn" data-action="decreaseSize">−</button>
+            <button class="setting-btn" data-action="decreaseSize" aria-label="Decrease font size">−</button>
             <span id="fontSize">18</span>px
-            <button class="setting-btn" data-action="increaseSize">+</button>
+            <button class="setting-btn" data-action="increaseSize" aria-label="Increase font size">+</button>
           </div>
         </div>
 
@@ -413,9 +487,9 @@
         <div class="setting-group">
           <label>Background Opacity <span class="keyboard-shortcut">(Alt + Left/Right)</span></label>
           <div class="setting-control">
-            <button class="setting-btn" data-action="decreaseOpacity">−</button>
+            <button class="setting-btn" data-action="decreaseOpacity" aria-label="Decrease opacity">−</button>
             <span id="opacity">80</span>%
-            <button class="setting-btn" data-action="increaseOpacity">+</button>
+            <button class="setting-btn" data-action="increaseOpacity" aria-label="Increase opacity">+</button>
           </div>
         </div>
 
@@ -426,7 +500,7 @@
       </div>
     </div>
   </div>
-    <div id="status"></div>
+  <div id="status"></div>
   <div class="footer">
     Subly <span class="version" id="versionDisplay">v...</span>
   </div>

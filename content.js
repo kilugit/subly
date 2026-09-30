@@ -4,40 +4,50 @@ class YouTubeSubtitleInjector {
     this.subtitles = [];
     this.currentSubtitle = null;
     this.subtitleElement = null;
-    this.updateInterval = null;
     this.toggleButton = null;
     this.subtitlesEnabled = true;
     this.subtitlesLoaded = false;
     this.autoLoadInProgress = false;
     this.lastVideoId = null;
+    this._timeUpdateHandler = null;
+    this._videoObserver = null;
+    this._controlsObserver = null;
+    this._isInitialized = false;
+    this._buttonPath = null;
+    this._buttonLine = null;
+    this._settings = {
+      fontSize: 18,
+      position: "bottom",
+      opacity: 80,
+      textColor: "#ffffff",
+    };
     this.init();
   }
+
   init() {
+    if (this._isInitialized) return;
+    this._isInitialized = true;
     this.waitForVideo();
     this.listenForMessages();
     this.setupKeyboardShortcuts();
     this.setupPlayerButton();
   }
+
   waitForVideo() {
     const checkVideo = () => {
       const newVideo = document.querySelector("video");
       if (newVideo && newVideo !== this.video) {
-        console.log("New video element detected");
         this.video = newVideo;
         this.setupSubtitleDisplay();
-        // Add a small delay to ensure video is fully loaded before auto-loading
+        this._attachTimeUpdateListener();
+        this._observeVideoRemoval();
         setTimeout(() => this.autoLoadSubtitles(), 500);
       } else if (!newVideo) {
-        setTimeout(checkVideo, 1000);
+        this._videoRetryTimeout = setTimeout(checkVideo, 1000);
       } else if (newVideo === this.video) {
-        // Same video element, check if we need to auto-load for new URL
         const urlParams = new URLSearchParams(window.location.search);
         const currentVideoId = urlParams.get("v");
-
         if (currentVideoId && currentVideoId !== this.lastVideoId) {
-          console.log(
-            "Same video element but different video ID, auto-loading..."
-          );
           this.lastVideoId = currentVideoId;
           setTimeout(() => this.autoLoadSubtitles(), 500);
         }
@@ -46,21 +56,59 @@ class YouTubeSubtitleInjector {
     checkVideo();
   }
 
+  _attachTimeUpdateListener() {
+    if (this._timeUpdateHandler) {
+      this.video.removeEventListener("timeupdate", this._timeUpdateHandler);
+    }
+    this._timeUpdateHandler = () => {
+      if (this.video && !this.video.paused) {
+        this.updateSubtitles();
+      }
+    };
+    this.video.addEventListener("timeupdate", this._timeUpdateHandler);
+  }
+
+  _observeVideoRemoval() {
+    if (this._videoObserver) {
+      this._videoObserver.disconnect();
+    }
+    this._videoObserver = new MutationObserver(() => {
+      if (!document.contains(this.video)) {
+        this._cleanupVideo();
+      }
+    });
+    this._videoObserver.observe(document.body, { childList: true, subtree: true });
+  }
+
+  _cleanupVideo() {
+    if (this._timeUpdateHandler && this.video) {
+      this.video.removeEventListener("timeupdate", this._timeUpdateHandler);
+    }
+    this._timeUpdateHandler = null;
+    this.video = null;
+    this.hideSubtitle();
+    this.currentSubtitle = null;
+  }
+
   setupSubtitleDisplay() {
-    // Create subtitle container
+    if (this.subtitleElement && this.subtitleElement.parentNode) {
+      this.subtitleElement.parentNode.removeChild(this.subtitleElement);
+    }
+
     this.subtitleElement = document.createElement("div");
-    this.subtitleElement.id = "custom-subtitles"; // Default settings
-    this.settings = {
-      fontSize: 18,
-      position: "bottom",
-      opacity: 80,
-      textColor: "#ffffff",
-    }; // Load saved settings
+    this.subtitleElement.id = "custom-subtitles";
+
     chrome.storage.sync.get(
       ["subtitleSettings", "subtitlesEnabled"],
       (result) => {
+        if (chrome.runtime.lastError) {
+          console.warn("Storage error:", chrome.runtime.lastError.message);
+          this.applySettings();
+          this.updateButtonState();
+          return;
+        }
         if (result.subtitleSettings) {
-          this.settings = { ...this.settings, ...result.subtitleSettings };
+          this._settings = { ...this._settings, ...result.subtitleSettings };
         }
         if (result.subtitlesEnabled !== undefined) {
           this.subtitlesEnabled = result.subtitlesEnabled;
@@ -69,7 +117,7 @@ class YouTubeSubtitleInjector {
         this.updateButtonState();
       }
     );
-    // Find YouTube player container
+
     const playerContainer = document.querySelector(
       "#movie_player, .html5-video-player"
     );
@@ -78,28 +126,50 @@ class YouTubeSubtitleInjector {
       playerContainer.appendChild(this.subtitleElement);
     }
   }
+
   setupPlayerButton() {
-    // Wait for YouTube controls to load with increased retry attempts
-    const waitForControls = (attempts = 0) => {
+    if (this._controlsObserver) {
+      this._controlsObserver.disconnect();
+    }
+
+    const checkControls = () => {
       const rightControls = document.querySelector(".ytp-right-controls");
       if (rightControls) {
         this.injectToggleButton(rightControls);
-      } else if (attempts < 10) {
-        setTimeout(() => waitForControls(attempts + 1), 500);
-      } else {
-        console.warn("Failed to find YouTube controls after multiple attempts");
+        return true;
       }
+      return false;
     };
-    waitForControls();
+
+    if (!checkControls()) {
+      let attempts = 0;
+      const maxAttempts = 20;
+      const retry = () => {
+        if (attempts >= maxAttempts) {
+          console.warn("Failed to find YouTube controls after maximum attempts");
+          return;
+        }
+        attempts++;
+        if (!checkControls()) {
+          this._controlsRetryTimeout = setTimeout(retry, 500);
+        }
+      };
+      this._controlsObserver = new MutationObserver(() => {
+        if (checkControls()) {
+          this._controlsObserver.disconnect();
+          this._controlsObserver = null;
+        }
+      });
+      this._controlsObserver.observe(document.body, { childList: true, subtree: true });
+      retry();
+    }
   }
 
   injectToggleButton(rightControls) {
-    // Remove existing button if it exists
     if (this.toggleButton && this.toggleButton.parentNode) {
       this.toggleButton.parentNode.removeChild(this.toggleButton);
     }
 
-    // Create the toggle button
     this.toggleButton = document.createElement("button");
     this.toggleButton.id = "subly-toggle-button";
     this.toggleButton.className = "ytp-button";
@@ -115,30 +185,35 @@ class YouTubeSubtitleInjector {
       cursor: default;
       opacity: 0.3;
       transition: opacity 0.2s ease;
-    `; // Create SVG icon for the button
+    `;
+
     this.toggleButton.innerHTML = `
       <svg height="100%" version="1.1" viewBox="0 0 36 36" width="100%">
         <path d="M8,8 C6.89,8 6,8.9 6,10 L6,26 C6,27.1 6.89,28 8,28 L28,28 C29.1,28 30,27.1 30,26 L30,10 C30,8.9 29.1,8 28,8 L8,8 Z M10,12 L26,12 L26,14 L10,14 L10,12 z M10,16 L20,16 L20,18 L10,18 L10,16 z M10,20 L24,20 L24,22 L10,22 L10,20 z M26,18 L28,18 L28,20 L26,20 L26,18 z" fill="#666" stroke="none"/>
       </svg>
     `;
 
-    // Add click event listener
+    this._buttonPath = this.toggleButton.querySelector("path");
+    this._buttonLine = null;
+
     this.toggleButton.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
       this.toggleSubtitles();
     });
 
-    // Insert the button before the subtitles button or at the beginning
-    const subtitlesButton = rightControls.querySelector(
-      ".ytp-subtitles-button"
-    );
-    if (subtitlesButton) {
-      rightControls.insertBefore(this.toggleButton, subtitlesButton);
-    } else {
-      rightControls.insertBefore(this.toggleButton, rightControls.firstChild);
+    try {
+      const subtitlesButton = rightControls.querySelector(".ytp-subtitles-button");
+      if (subtitlesButton && rightControls.contains(subtitlesButton)) {
+        rightControls.insertBefore(this.toggleButton, subtitlesButton);
+      } else {
+        rightControls.appendChild(this.toggleButton);
+      }
+    } catch (e) {
+      rightControls.appendChild(this.toggleButton);
     }
   }
+
   toggleSubtitles() {
     if (!this.subtitlesLoaded) return;
 
@@ -150,17 +225,15 @@ class YouTubeSubtitleInjector {
       this.currentSubtitle = null;
     }
 
-    // Save state
     chrome.storage.sync.set({ subtitlesEnabled: this.subtitlesEnabled });
   }
+
   updateButtonState() {
     if (!this.toggleButton) return;
 
     const isActive = this.subtitlesLoaded && this.subtitlesEnabled;
     const isLoaded = this.subtitlesLoaded;
 
-    // Update button opacity and cursor
-    // I'm not gonna pretend like I know why this works, but it does
     this.toggleButton.style.opacity = isLoaded
       ? isActive
         ? "1"
@@ -168,7 +241,6 @@ class YouTubeSubtitleInjector {
       : "0.3";
     this.toggleButton.style.cursor = isLoaded ? "pointer" : "default";
 
-    // Update aria labels and titles
     let label, title;
     if (!isLoaded) {
       label = title = "No Subly subtitles loaded";
@@ -181,21 +253,12 @@ class YouTubeSubtitleInjector {
     this.toggleButton.setAttribute("aria-label", label);
     this.toggleButton.setAttribute("title", title);
 
-    // Update the SVG icon
-    const path = this.toggleButton.querySelector("path");
-    const line = this.toggleButton.querySelector("line");
-
-    if (path) {
-      if (!isLoaded) {
-        path.setAttribute("fill", "#666");
-      } else {
-        path.setAttribute("fill", "#fff");
-      }
+    if (this._buttonPath) {
+      this._buttonPath.setAttribute("fill", isLoaded ? "#fff" : "#666");
     }
 
-    // Handle the disabled line
     if (isLoaded && !this.subtitlesEnabled) {
-      if (!line) {
+      if (!this._buttonLine) {
         const svg = this.toggleButton.querySelector("svg");
         const newLine = document.createElementNS(
           "http://www.w3.org/2000/svg",
@@ -209,47 +272,50 @@ class YouTubeSubtitleInjector {
         newLine.setAttribute("stroke-width", "2.5");
         newLine.setAttribute("opacity", "0.9");
         svg.appendChild(newLine);
+        this._buttonLine = newLine;
       }
     } else {
-      if (line) line.remove();
+      if (this._buttonLine) {
+        this._buttonLine.remove();
+        this._buttonLine = null;
+      }
     }
   }
+
   listenForMessages() {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      if (message.action === "loadSubtitles") {
-        this.loadSubtitles(message.srtContent);
-        sendResponse({ success: true });
-      } else if (message.action === "updateSettings") {
-        this.updateSettings(message.settings);
-        sendResponse({ success: true });
-      } else if (message.action === "toggleSubtitles") {
-        this.toggleSubtitles();
-        sendResponse({ success: true, enabled: this.subtitlesEnabled });
+      try {
+        if (message.action === "loadSubtitles") {
+          this.loadSubtitles(message.srtContent);
+          sendResponse({ success: true });
+        } else if (message.action === "updateSettings") {
+          this.updateSettings(message.settings);
+          sendResponse({ success: true });
+        } else if (message.action === "toggleSubtitles") {
+          this.toggleSubtitles();
+          sendResponse({ success: true, enabled: this.subtitlesEnabled });
+        }
+      } catch (error) {
+        console.error("Message handling error:", error);
+        sendResponse({ success: false, error: error.message });
       }
+      return true;
     });
   }
+
   loadSubtitles(srtContent) {
     try {
-      // Clear any existing subtitles first
       this.subtitles = [];
       this.currentSubtitle = null;
       this.subtitlesLoaded = false;
 
-      // Stop any existing tracking
-      if (this.updateInterval) {
-        clearInterval(this.updateInterval);
-        this.updateInterval = null;
-      }
-
-      // Hide any currently visible subtitle
       this.hideSubtitle();
 
-      // Parse new subtitles
       this.subtitles = SRTParser.parse(srtContent);
       this.subtitlesLoaded = this.subtitles.length > 0;
 
       if (this.subtitlesLoaded) {
-        this.startSubtitleTracking();
+        this._sortSubtitles();
         console.log(`Loaded ${this.subtitles.length} subtitles`);
       } else {
         console.warn("No subtitles were parsed from the content");
@@ -263,73 +329,92 @@ class YouTubeSubtitleInjector {
     }
   }
 
-  startSubtitleTracking() {
-    if (this.updateInterval) {
-      clearInterval(this.updateInterval);
+  _sortSubtitles() {
+    this.subtitles.sort((a, b) => a.startTime - b.startTime);
+  }
+
+  _findSubtitleIndex(currentTime) {
+    let low = 0;
+    let high = this.subtitles.length - 1;
+    let result = -1;
+
+    while (low <= high) {
+      const mid = (low + high) >>> 1;
+      const sub = this.subtitles[mid];
+
+      if (currentTime >= sub.startTime && currentTime <= sub.endTime) {
+        return mid;
+      }
+
+      if (currentTime < sub.startTime) {
+        high = mid - 1;
+      } else {
+        result = mid;
+        low = mid + 1;
+      }
     }
 
-    this.updateInterval = setInterval(() => {
-      if (this.video && !this.video.paused) {
-        this.updateSubtitles();
-      }
-    }, 100); // Update every 100ms for smooth display
+    if (result >= 0 && currentTime >= this.subtitles[result].startTime && currentTime <= this.subtitles[result].endTime) {
+      return result;
+    }
+
+    return -1;
   }
+
   updateSubtitles() {
-    if (!this.subtitlesEnabled) return;
+    if (!this.subtitlesEnabled || !this.video) return;
 
     const currentTime = this.video.currentTime;
+    const index = this._findSubtitleIndex(currentTime);
 
-    // Find current subtitle
-    const subtitle = this.subtitles.find(
-      (sub) => currentTime >= sub.startTime && currentTime <= sub.endTime
-    );
-
-    if (subtitle && subtitle !== this.currentSubtitle) {
-      this.showSubtitle(subtitle.text);
-      this.currentSubtitle = subtitle;
-    } else if (!subtitle && this.currentSubtitle) {
+    if (index >= 0) {
+      const subtitle = this.subtitles[index];
+      if (subtitle !== this.currentSubtitle) {
+        this.showSubtitle(subtitle.text);
+        this.currentSubtitle = subtitle;
+      }
+    } else if (this.currentSubtitle) {
       this.hideSubtitle();
       this.currentSubtitle = null;
     }
   }
+
   showSubtitle(text) {
     if (this.subtitleElement) {
-      this.subtitleElement.innerHTML = this.sanitizeHTML(text);
+      if (text.includes("<")) {
+        this.subtitleElement.innerHTML = this.sanitizeHTML(text);
+      } else {
+        this.subtitleElement.textContent = text;
+      }
       this.subtitleElement.style.display = "block";
     }
   }
 
   sanitizeHTML(text) {
-    // Allow only safe subtitle HTML tags
-    const allowedTags = ["i", "b", "u", "strong", "em", "br", "font"];
-    const allowedAttributes = ["color", "size", "face"];
+    const allowedTags = new Set(["i", "b", "u", "strong", "em", "br", "font"]);
+    const allowedAttributes = new Set(["color", "size", "face"]);
 
-    // Create a temporary element to parse the HTML
     const temp = document.createElement("div");
     temp.innerHTML = text;
 
-    // Remove any script tags or other dangerous elements
     const scripts = temp.querySelectorAll(
       "script, object, embed, iframe, link, meta, style"
     );
     scripts.forEach((script) => script.remove());
 
-    // Remove attributes from allowed tags except for font tag
     const allElements = temp.querySelectorAll("*");
     allElements.forEach((element) => {
-      if (!allowedTags.includes(element.tagName.toLowerCase())) {
-        // Replace disallowed tags with their text content
+      const tagName = element.tagName.toLowerCase();
+      if (!allowedTags.has(tagName)) {
         element.replaceWith(document.createTextNode(element.textContent));
-      } else if (element.tagName.toLowerCase() === "font") {
-        // For font tags, only keep allowed attributes
+      } else if (tagName === "font") {
         const attrs = Array.from(element.attributes);
         attrs.forEach((attr) => {
-          if (!allowedAttributes.includes(attr.name.toLowerCase())) {
+          if (!allowedAttributes.has(attr.name.toLowerCase())) {
             element.removeAttribute(attr.name);
           }
         });
       } else {
-        // For other allowed tags, remove all attributes
         const attrs = Array.from(element.attributes);
         attrs.forEach((attr) => element.removeAttribute(attr.name));
       }
@@ -348,39 +433,44 @@ class YouTubeSubtitleInjector {
     if (!this.subtitleElement) return;
 
     const position =
-      this.settings.position === "top"
+      this._settings.position === "top"
         ? "60px"
-        : this.settings.position === "middle"
+        : this._settings.position === "middle"
         ? "50%"
         : "auto";
-    const bottom = this.settings.position === "bottom" ? "60px" : "auto";
+    const bottom = this._settings.position === "bottom" ? "60px" : "auto";
     const transform =
-      this.settings.position === "middle"
+      this._settings.position === "middle"
         ? "translate(-50%, -50%)"
         : "translateX(-50%)";
+
     this.subtitleElement.style.cssText = `
       position: absolute;
       top: ${position};
       bottom: ${bottom};
       left: 50%;
-      transform: ${transform};      background: rgba(0, 0, 0, ${
-      this.settings.opacity / 100
-    });
-      color: ${this.settings.textColor};
+      transform: ${transform};
+      background: rgba(0, 0, 0, ${this._settings.opacity / 100});
+      color: ${this._settings.textColor};
       padding: 8px 16px;
       border-radius: 4px;
-      font-size: ${this.settings.fontSize}px;
-      font-family: Arial, sans-serif;
+      font-size: ${this._settings.fontSize}px;
+      font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
       text-align: center;
       z-index: 9999;
       max-width: 80%;
       display: none;
       pointer-events: none;
-      transition: all 0.3s ease-out;
-      transition-property: font-size, color, background-color, top, bottom, transform;
+      line-height: 1.4;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8), 0 0 2px rgba(0, 0, 0, 0.9);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      will-change: transform;
+      contain: layout style paint;
     `;
 
-    // Add styles for HTML elements within subtitles
     if (!document.getElementById("subtitle-html-styles")) {
       const styleSheet = document.createElement("style");
       styleSheet.id = "subtitle-html-styles";
@@ -403,57 +493,50 @@ class YouTubeSubtitleInjector {
   }
 
   updateSettings(newSettings) {
-    // Calculate position before applying new settings
-    const wasVisible =
-      this.subtitleElement && this.subtitleElement.style.display === "block";
-    const previousSettings = { ...this.settings };
+    if (!this.subtitleElement) return;
 
-    // Update settings
-    this.settings = { ...this.settings, ...newSettings };
+    const wasVisible = this.subtitleElement.style.display === "block";
+    const previousPosition = this._settings.position;
 
-    // If position is changing, we need special handling for smooth transition
-    if (previousSettings.position !== this.settings.position) {
-      // First move to the new position while invisible
+    this._settings = { ...this._settings, ...newSettings };
+
+    if (previousPosition !== this._settings.position) {
       this.subtitleElement.style.display = "none";
       this.applySettings();
-
-      // Force a reflow to ensure the transition will work
       this.subtitleElement.offsetHeight;
-
-      // Make visible again if it was visible before
       if (wasVisible) {
         this.subtitleElement.style.display = "block";
       }
     } else {
-      // For other properties, just apply normally
       this.applySettings();
     }
 
-    // Save settings
-    chrome.storage.sync.set({ subtitleSettings: this.settings });
+    chrome.storage.sync.set({ subtitleSettings: this._settings });
   }
-  // Update keyboard shortcuts to use smoother increments
+
   setupKeyboardShortcuts() {
     document.addEventListener("keydown", (e) => {
       if (!e.altKey) return;
 
       switch (e.key) {
         case "ArrowUp":
-          this.updateSettings({ fontSize: this.settings.fontSize + 1 });
+          e.preventDefault();
+          this.updateSettings({ fontSize: Math.min(64, this._settings.fontSize + 1) });
           break;
         case "ArrowDown":
-          this.updateSettings({
-            fontSize: Math.max(8, this.settings.fontSize - 1),
-          });
+          e.preventDefault();
+          this.updateSettings({ fontSize: Math.max(8, this._settings.fontSize - 1) });
           break;
         case "ArrowLeft":
+          e.preventDefault();
           this.updateSettings({
-            opacity: Math.max(0, this.settings.opacity - 5),
+            opacity: Math.max(0, this._settings.opacity - 5),
           });
           break;
         case "ArrowRight":
+          e.preventDefault();
           this.updateSettings({
-            opacity: Math.min(100, this.settings.opacity + 5),
+            opacity: Math.min(100, this._settings.opacity + 5),
           });
           break;
         case "w":
@@ -489,37 +572,24 @@ class YouTubeSubtitleInjector {
       return null;
     }
   }
+
   async autoLoadSubtitles() {
+    if (this.autoLoadInProgress) return;
+
+    this.autoLoadInProgress = true;
+
     try {
-      // Prevent multiple simultaneous auto-load attempts
-      if (this.autoLoadInProgress) {
-        console.log("Auto-load already in progress, skipping...");
-        return;
-      }
-
-      this.autoLoadInProgress = true;
-
       const config = await this.fetchConfig();
-      if (!config || !config.videoMappings) {
-        console.log("No config or video mappings found");
-        this.autoLoadInProgress = false;
-        return;
-      }
+      if (!config || !config.videoMappings) return;
 
       const urlParams = new URLSearchParams(window.location.search);
       const videoId = urlParams.get("v");
 
-      console.log("Checking auto-load for video ID:", videoId);
-
       if (videoId && config.videoMappings[videoId]) {
         const srtUrl = config.videoMappings[videoId];
-        console.log("Found mapping, fetching subtitles from:", srtUrl);
-
         const response = await fetch(srtUrl);
         if (!response.ok) {
-          throw new Error(
-            `Failed to fetch SRT from ${srtUrl}: ${response.status}`
-          );
+          throw new Error(`Failed to fetch SRT: ${response.status}`);
         }
 
         const content = await response.text();
@@ -528,9 +598,6 @@ class YouTubeSubtitleInjector {
         }
 
         this.loadSubtitles(content);
-        console.log("Subtitles auto-loaded successfully for video:", videoId);
-      } else {
-        console.log("No subtitle mapping found for video ID:", videoId);
       }
     } catch (error) {
       console.error("Error auto-loading subtitles:", error);
@@ -538,30 +605,64 @@ class YouTubeSubtitleInjector {
       this.autoLoadInProgress = false;
     }
   }
+
+  cleanup() {
+    if (this._timeUpdateHandler && this.video) {
+      this.video.removeEventListener("timeupdate", this._timeUpdateHandler);
+    }
+    this._timeUpdateHandler = null;
+
+    if (this._videoObserver) {
+      this._videoObserver.disconnect();
+      this._videoObserver = null;
+    }
+
+    if (this._controlsObserver) {
+      this._controlsObserver.disconnect();
+      this._controlsObserver = null;
+    }
+
+    if (this._videoRetryTimeout) {
+      clearTimeout(this._videoRetryTimeout);
+      this._videoRetryTimeout = null;
+    }
+
+    if (this._controlsRetryTimeout) {
+      clearTimeout(this._controlsRetryTimeout);
+      this._controlsRetryTimeout = null;
+    }
+
+    if (this.subtitleElement && this.subtitleElement.parentNode) {
+      this.subtitleElement.parentNode.removeChild(this.subtitleElement);
+    }
+    this.subtitleElement = null;
+
+    if (this.toggleButton && this.toggleButton.parentNode) {
+      this.toggleButton.parentNode.removeChild(this.toggleButton);
+    }
+    this.toggleButton = null;
+    this._buttonPath = null;
+    this._buttonLine = null;
+
+    this.video = null;
+    this.subtitles = [];
+    this.currentSubtitle = null;
+    this.subtitlesLoaded = false;
+    this.autoLoadInProgress = false;
+    this._isInitialized = false;
+  }
 }
 
-// Global instance
 let injector = null;
 let navigationObserver = null;
+let currentURL = location.href;
 
-// Cleanup function
 function cleanup() {
   if (injector) {
-    if (injector.updateInterval) {
-      clearInterval(injector.updateInterval);
-    }
-    if (injector.subtitleElement && injector.subtitleElement.parentNode) {
-      injector.subtitleElement.parentNode.removeChild(injector.subtitleElement);
-    }
-    if (injector.toggleButton && injector.toggleButton.parentNode) {
-      injector.toggleButton.parentNode.removeChild(injector.toggleButton);
-    }
-    // Reset loading state
-    injector.autoLoadInProgress = false;
+    injector.cleanup();
     injector = null;
   }
 
-  // Clean up subtitle HTML styles
   const subtitleStyles = document.getElementById("subtitle-html-styles");
   if (subtitleStyles) {
     subtitleStyles.remove();
@@ -573,11 +674,9 @@ function cleanup() {
   }
 }
 
-// Initialize when page loads
 function initialize() {
   cleanup();
   try {
-    // Add a small delay to ensure DOM is ready
     setTimeout(() => {
       injector = new YouTubeSubtitleInjector();
     }, 100);
@@ -592,8 +691,6 @@ if (document.readyState === "loading") {
   initialize();
 }
 
-// Handle YouTube's dynamic navigation
-let currentURL = location.href;
 navigationObserver = new MutationObserver(() => {
   if (location.href !== currentURL) {
     const newURL = location.href;
@@ -602,13 +699,9 @@ navigationObserver = new MutationObserver(() => {
 
     currentURL = newURL;
 
-    console.log("Navigation detected:", { oldVideoId, newVideoId });
-
-    // Only reinitialize if we're navigating to a different video
     if (oldVideoId !== newVideoId) {
       setTimeout(() => {
         initialize();
-        // Re-setup the button after navigation with longer delay
         if (injector) {
           setTimeout(() => injector.setupPlayerButton(), 1500);
         }
@@ -616,51 +709,6 @@ navigationObserver = new MutationObserver(() => {
     }
   }
 });
-navigationObserver.observe(document, { subtree: true, childList: true });
+navigationObserver.observe(document.body, { childList: true, subtree: true });
 
-// Fallback mechanism - periodically check for URL changes
-// This helps catch navigation events that the MutationObserver might miss
-setInterval(() => {
-  if (location.href !== currentURL) {
-    console.log("Fallback navigation detection triggered");
-    const newURL = location.href;
-    const oldVideoId = new URLSearchParams(new URL(currentURL).search).get("v");
-    const newVideoId = new URLSearchParams(new URL(newURL).search).get("v");
 
-    currentURL = newURL;
-
-    if (oldVideoId !== newVideoId && injector) {
-      console.log("Fallback: Different video detected, checking auto-load");
-      injector.lastVideoId = newVideoId;
-      setTimeout(() => injector.autoLoadSubtitles(), 1000);
-    }
-  }
-}, 2000); // Check every 2 seconds
-
-// Handle errors that might occur when the extension context is invalidated
-window.addEventListener("unload", cleanup);
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  try {
-    if (!chrome.runtime.id) {
-      cleanup();
-      return false;
-    }
-    if (injector) {
-      if (message.action === "loadSubtitles") {
-        injector.loadSubtitles(message.srtContent);
-        sendResponse({ success: true });
-      } else if (message.action === "updateSettings") {
-        injector.updateSettings(message.settings);
-        sendResponse({ success: true });
-      } else if (message.action === "toggleSubtitles") {
-        injector.toggleSubtitles();
-        sendResponse({ success: true, enabled: injector.subtitlesEnabled });
-      }
-    }
-  } catch (e) {
-    console.error("Extension context error:", e);
-    cleanup();
-    return false;
-  }
-  return true; // Keep the message channel open for async response
-});

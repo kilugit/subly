@@ -1,4 +1,5 @@
-class PopupController {  constructor() {
+class PopupController {
+  constructor() {
     this.fileInput = document.getElementById("fileInput");
     this.loadBtn = document.getElementById("loadBtn");
     this.status = document.getElementById("status");
@@ -17,6 +18,8 @@ class PopupController {  constructor() {
     this.statusText = document.getElementById("statusText");
     this.toggleSubtitlesBtn = document.getElementById("toggleSubtitlesBtn");
     this.updateTimeout = null;
+    this._debouncedUpdateSetting = null;
+    this._activeTab = null;
 
     this.init();
     this.loadSettings();
@@ -34,26 +37,36 @@ class PopupController {  constructor() {
       this.updateTimeout = setTimeout(() => func.apply(this, args), wait);
     };
   }
+
+  async getActiveTab() {
+    if (this._activeTab) return this._activeTab;
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    this._activeTab = tab;
+    return tab;
+  }
+
   async loadSettings() {
-    const result = await chrome.storage.sync.get([
-      "subtitleSettings",
-      "subtitlesEnabled",
-    ]);
-    const settings = result.subtitleSettings || {
-      fontSize: 18,
-      position: "bottom",
-      opacity: 80,
-      textColor: "#ffffff",
-    };
+    try {
+      const result = await chrome.storage.sync.get([
+        "subtitleSettings",
+        "subtitlesEnabled",
+      ]);
+      const settings = result.subtitleSettings || {
+        fontSize: 18,
+        position: "bottom",
+        opacity: 80,
+        textColor: "#ffffff",
+      };
 
-    // Update UI with initial values
-    this.fontSize.textContent = settings.fontSize;
-    this.position.value = settings.position;
-    this.opacity.textContent = settings.opacity;
-    this.textColor.value = settings.textColor;
+      this.fontSize.textContent = settings.fontSize;
+      this.position.value = settings.position;
+      this.opacity.textContent = settings.opacity;
+      this.textColor.value = settings.textColor;
 
-    // Update subtitle status
-    this.updateSubtitleStatus(result.subtitlesEnabled !== false);
+      this.updateSubtitleStatus(result.subtitlesEnabled !== false);
+    } catch (error) {
+      console.error("Failed to load settings:", error);
+    }
   }
 
   async loadVersion() {
@@ -65,7 +78,6 @@ class PopupController {  constructor() {
       }
     } catch (error) {
       console.error("Failed to load version:", error);
-      // Fallback to a default version if manifest loading fails
       const versionElement = document.getElementById("versionDisplay");
       if (versionElement) {
         versionElement.textContent = "v1.0";
@@ -74,17 +86,14 @@ class PopupController {  constructor() {
   }
 
   setupEventListeners() {
-    // File input change
     this.fileInput.addEventListener("change", (e) => {
       this.handleFileSelect(e.target.files[0]);
     });
 
-    // Drop area click
     this.dropArea.addEventListener("click", () => {
       this.fileInput.click();
     });
 
-    // Drag and drop
     this.dropArea.addEventListener("dragover", (e) => {
       e.preventDefault();
       this.dropArea.classList.add("dragover");
@@ -103,33 +112,30 @@ class PopupController {  constructor() {
       }
     });
 
-    // URL paste handling
     this.urlInput.addEventListener("input", () => {
       const url = this.urlInput.value.trim();
       this.fetchBtn.disabled = !url;
     });
 
-    // Fetch button click
     this.fetchBtn.addEventListener("click", () => {
       this.handleUrlFetch(this.urlInput.value.trim());
     });
 
-    // Load button click
     this.loadBtn.addEventListener("click", () => {
       this.loadSubtitles();
     });
 
-    // Settings toggle
     this.toggleSettings.addEventListener("click", () => {
       this.settingsPanel.classList.toggle("visible");
-    }); // Font size controls with real-time updates
+    });
+
     document
       .querySelectorAll(
         '[data-action="increaseSize"], [data-action="decreaseSize"]'
       )
       .forEach((btn) => {
         btn.addEventListener("click", () => {
-          const currentSize = parseInt(this.fontSize.textContent);
+          const currentSize = parseInt(this.fontSize.textContent, 10);
           const newSize =
             btn.dataset.action === "increaseSize"
               ? Math.min(64, currentSize + 2)
@@ -139,14 +145,13 @@ class PopupController {  constructor() {
         });
       });
 
-    // Opacity controls with real-time updates
     document
       .querySelectorAll(
         '[data-action="increaseOpacity"], [data-action="decreaseOpacity"]'
       )
       .forEach((btn) => {
         btn.addEventListener("click", () => {
-          const currentOpacity = parseInt(this.opacity.textContent);
+          const currentOpacity = parseInt(this.opacity.textContent, 10);
           const newOpacity =
             btn.dataset.action === "increaseOpacity"
               ? Math.min(100, currentOpacity + 10)
@@ -156,21 +161,19 @@ class PopupController {  constructor() {
         });
       });
 
-    // Position select with immediate update
     this.position.addEventListener("change", (e) => {
       this.updateSetting("position", e.target.value);
-    }); // Text color with real-time updates
+    });
+
     this.textColor.addEventListener("input", (e) => {
       this.debouncedUpdateSetting("textColor", e.target.value);
     });
 
-    // Toggle subtitles button
     this.toggleSubtitlesBtn.addEventListener("click", () => {
       this.toggleSubtitles();
     });
 
-    // Initialize debounced update function
-    this.debouncedUpdateSetting = this.debounce(
+    this._debouncedUpdateSetting = this.debounce(
       this.updateSetting.bind(this),
       100
     );
@@ -240,26 +243,30 @@ class PopupController {  constructor() {
         srtContent = await this.readFile(this.selectedFile);
       }
 
-      // Get active tab and send message to content script
-      const [tab] = await chrome.tabs.query({
-        active: true,
-        currentWindow: true,
-      });
-
-      if (!tab.url.includes("youtube.com")) {
+      const tab = await this.getActiveTab();
+      if (!tab || !tab.url || !tab.url.includes("youtube.com/watch")) {
         this.showStatus("Please navigate to a YouTube video first", "error");
         this.loadBtn.disabled = false;
         return;
       }
-      await chrome.tabs.sendMessage(tab.id, {
-        action: "loadSubtitles",
-        srtContent: srtContent,
-      });
+
+      try {
+        await chrome.tabs.sendMessage(tab.id, {
+          action: "loadSubtitles",
+          srtContent: srtContent,
+        });
+      } catch (sendError) {
+        if (sendError.message?.includes("Receiving end does not exist")) {
+          this.showStatus("Please refresh the YouTube page and try again", "error");
+          this.loadBtn.disabled = false;
+          return;
+        }
+        throw sendError;
+      }
 
       this.showStatus("Subtitles loaded successfully!", "success");
-      this.updateSubtitleStatus(true); // Show subtitle status as enabled
+      this.updateSubtitleStatus(true);
 
-      // Auto-close popup after 2 seconds
       setTimeout(() => {
         window.close();
       }, 2000);
@@ -290,58 +297,59 @@ class PopupController {  constructor() {
   }
 
   async updateSetting(key, value) {
-    const result = await chrome.storage.sync.get(["subtitleSettings"]);
-    const settings = result.subtitleSettings || {
-      fontSize: 18,
-      position: "bottom",
-      opacity: 80,
-      textColor: "#ffffff",
-    };
+    try {
+      const result = await chrome.storage.sync.get(["subtitleSettings"]);
+      const settings = result.subtitleSettings || {
+        fontSize: 18,
+        position: "bottom",
+        opacity: 80,
+        textColor: "#ffffff",
+      };
 
-    settings[key] = value;
-    await chrome.storage.sync.set({ subtitleSettings: settings });
+      settings[key] = value;
+      await chrome.storage.sync.set({ subtitleSettings: settings });
 
-    // Update UI
-    switch (key) {
-      case "fontSize":
-        this.fontSize.textContent = value;
-        break;
-      case "opacity":
-        this.opacity.textContent = value;
-        break;
-      case "position":
-        this.position.value = value;
-        break;
-      case "textColor":
-        this.textColor.value = value;
-        break;
-    } // Update active tab if on YouTube
-    const [tab] = await chrome.tabs.query({
-      active: true,
-      currentWindow: true,
-    });
-    if (tab?.url?.includes("youtube.com")) {
-      await chrome.tabs.sendMessage(tab.id, {
-        action: "updateSettings",
-        settings: settings,
-      });
+      switch (key) {
+        case "fontSize":
+          this.fontSize.textContent = value;
+          break;
+        case "opacity":
+          this.opacity.textContent = value;
+          break;
+        case "position":
+          this.position.value = value;
+          break;
+        case "textColor":
+          this.textColor.value = value;
+          break;
+      }
+
+      const tab = await this.getActiveTab();
+      if (tab && tab.url && tab.url.includes("youtube.com")) {
+        await chrome.tabs.sendMessage(tab.id, {
+          action: "updateSettings",
+          settings: settings,
+        });
+      }
+    } catch (error) {
+      console.error("Error updating setting:", error);
     }
   }
 
   async toggleSubtitles() {
     try {
-      const [tab] = await chrome.tabs.query({
-        active: true,
-        currentWindow: true,
-      });
-      if (tab?.url?.includes("youtube.com")) {
-        const response = await chrome.tabs.sendMessage(tab.id, {
-          action: "toggleSubtitles",
-        });
+      const tab = await this.getActiveTab();
+      if (!tab || !tab.url || !tab.url.includes("youtube.com")) {
+        this.showStatus("Please navigate to a YouTube video first", "error");
+        return;
+      }
 
-        if (response && response.success) {
-          this.updateSubtitleStatus(response.enabled);
-        }
+      const response = await chrome.tabs.sendMessage(tab.id, {
+        action: "toggleSubtitles",
+      });
+
+      if (response && response.success) {
+        this.updateSubtitleStatus(response.enabled);
       }
     } catch (error) {
       console.error("Error toggling subtitles:", error);
@@ -382,20 +390,21 @@ class PopupController {  constructor() {
       return null;
     }
   }
+
   async autoPopulateSubtitles() {
     try {
       const config = await this.fetchConfig();
       if (!config || !config.videoMappings) return;
 
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab.url.includes("youtube.com")) return;
-      
+      const tab = await this.getActiveTab();
+      if (!tab || !tab.url || !tab.url.includes("youtube.com")) return;
+
       const urlParams = new URLSearchParams(new URL(tab.url).search);
-      const videoId = urlParams.get('v');
+      const videoId = urlParams.get("v");
 
       if (videoId && config.videoMappings[videoId]) {
         const srtUrl = config.videoMappings[videoId];
-        this.showStatus('Auto-populating subtitles...', 'info');
+        this.showStatus("Auto-populating subtitles...", "info");
 
         const response = await fetch(srtUrl);
         if (!response.ok) {
@@ -403,29 +412,28 @@ class PopupController {  constructor() {
         }
 
         const content = await response.text();
-        if (!content.includes('-->')) {
-          throw new Error('Invalid SRT format');
+        if (!content.includes("-->")) {
+          throw new Error("Invalid SRT format");
         }
 
         this.srtContent = content;
         this.selectedFile = null;
         this.loadBtn.disabled = false;
-        this.dropArea.querySelector('.file-label').textContent = 'Auto-populated SRT file';
-        
-        // Show the GitHub URL in the URL input field
+        this.dropArea.querySelector(".file-label").textContent =
+          "Auto-populated SRT file";
+
         this.urlInput.value = srtUrl;
         this.fetchBtn.disabled = false;
-        
-        this.showStatus('Subtitles auto-populated successfully!', 'success');
+
+        this.showStatus("Subtitles auto-populated successfully!", "success");
       }
     } catch (error) {
-      console.error('Error auto-populating subtitles:', error);
-      this.showStatus('Error auto-populating subtitles.', 'error');
+      console.error("Error auto-populating subtitles:", error);
+      this.showStatus("Error auto-populating subtitles.", "error");
     }
   }
 }
 
-// Initialize popup when DOM is ready
 document.addEventListener("DOMContentLoaded", () => {
   new PopupController();
 });
