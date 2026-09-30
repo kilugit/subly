@@ -29,6 +29,7 @@ class YouTubeSubtitleInjector {
     this._isInitialized = true;
     this.waitForVideo();
     this.listenForMessages();
+    this.listenForStorageChanges();
     this.setupKeyboardShortcuts();
     this.setupPlayerButton();
   }
@@ -303,6 +304,21 @@ class YouTubeSubtitleInjector {
     });
   }
 
+  listenForStorageChanges() {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== "sync") return;
+      if (changes.subtitleSettings) {
+        this._settings = { ...this._settings, ...changes.subtitleSettings.newValue };
+        this.applySettings();
+      }
+      if (changes.subtitlesEnabled) {
+        this.subtitlesEnabled = changes.subtitlesEnabled.newValue !== false;
+        this.updateButtonState();
+        if (!this.subtitlesEnabled) this.hideSubtitle();
+      }
+    });
+  }
+
   loadSubtitles(srtContent) {
     try {
       this.subtitles = [];
@@ -432,6 +448,8 @@ class YouTubeSubtitleInjector {
   applySettings() {
     if (!this.subtitleElement) return;
 
+    const wasVisible = this.subtitleElement.style.display === "block";
+
     const position =
       this._settings.position === "top"
         ? "60px"
@@ -471,6 +489,10 @@ class YouTubeSubtitleInjector {
       contain: layout style paint;
     `;
 
+    if (wasVisible) {
+      this.subtitleElement.style.display = "block";
+    }
+
     if (!document.getElementById("subtitle-html-styles")) {
       const styleSheet = document.createElement("style");
       styleSheet.id = "subtitle-html-styles";
@@ -495,21 +517,8 @@ class YouTubeSubtitleInjector {
   updateSettings(newSettings) {
     if (!this.subtitleElement) return;
 
-    const wasVisible = this.subtitleElement.style.display === "block";
-    const previousPosition = this._settings.position;
-
     this._settings = { ...this._settings, ...newSettings };
-
-    if (previousPosition !== this._settings.position) {
-      this.subtitleElement.style.display = "none";
-      this.applySettings();
-      this.subtitleElement.offsetHeight;
-      if (wasVisible) {
-        this.subtitleElement.style.display = "block";
-      }
-    } else {
-      this.applySettings();
-    }
+    this.applySettings();
 
     chrome.storage.sync.set({ subtitleSettings: this._settings });
   }
