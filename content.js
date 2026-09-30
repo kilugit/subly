@@ -1,20 +1,26 @@
 /**
  * Subly - YouTube Subtitle Injector (Content Script)
- * Version 2.0.3 - Ultra-Resilient Edition
+ * Version 2.0.4 - Resilient YouTube Link Sync & Auto-Restore
  * 
  * Features:
  * - Robust protection against "Extension context invalidated"
  * - Auto-termination of zombie instances when extension is reloaded
- * - Safe Chrome Storage and Runtime API calls
+ * - Accurate YouTube link & video ID extraction (watch, shorts, embed, live)
+ * - Single-Page-App (SPA) navigation awareness (yt-navigate-finish, yt-page-data-updated, popstate)
+ * - Strict race condition prevention during async restores via navigation sequence guards
+ * - Clean state transitions (immediately clears old subtitles when navigating between videos)
+ * - Per-video cache persistence (saves subtitle content, file name, and fine-tuned sync offsets)
+ * - Restores exact user-adjusted timing offsets and respects explicit unload actions
+ * - Safe Chrome Storage and Runtime API calls with listener cleanup
  * - Real-time subtitle rendering for SRT & WebVTT with HTML formatting
  * - Real-time time synchronization adjustment (Alt+[, Alt+], Alt+\)
  * - Drag-and-drop subtitle files (.srt, .vtt) directly onto YouTube player
  * - Sleek on-screen HUD toast notifications
  * - Pause, seek, and variable playback speed auto-synchronization
- * - Pure CSS autohide transitions (zero CPU overhead)
+ * - Pure CSS autohide transitions
  * - Ad suppression (hides custom subtitles during ads)
  * - Fullscreen responsive typography
- * - Cache & auto-restore per YouTube video ID
+ * - Cache LRU pruning to prevent storage bloat
  */
 
 (function () {
@@ -32,6 +38,36 @@
     }
   }
 
+  // Helper to extract YouTube video ID from URL or pathname
+  function extractVideoId(urlString) {
+    try {
+      let search = "";
+      let pathname = "";
+      if (typeof urlString === "string") {
+        const url = new URL(urlString, window.location.origin);
+        search = url.search;
+        pathname = url.pathname;
+      } else {
+        search = window.location.search;
+        pathname = window.location.pathname;
+      }
+
+      // 1. Check ?v= query parameter
+      const params = new URLSearchParams(search);
+      const v = params.get("v");
+      if (v && /^[a-zA-Z0-9_-]+$/.test(v)) {
+        return v;
+      }
+
+      // 2. Check path-based formats: /shorts/ID, /embed/ID, /live/ID, /v/ID
+      const pathMatch = pathname.match(/\/(?:shorts|embed|live|v)\/([a-zA-Z0-9_-]+)/);
+      if (pathMatch && pathMatch[1]) {
+        return pathMatch[1];
+      }
+    } catch (_) {}
+    return "";
+  }
+
   // 3. Singleton cleanup of any prior instance in this page
   if (window.__subly_instance) {
     try {
@@ -45,6 +81,7 @@
       this.video = null;
       this.playerContainer = null;
       this.subtitles = [];
+      this.rawSrtContent = "";
       this.currentSubtitleKey = "";
       this.subtitleElement = null;
       this.dropOverlay = null;
@@ -54,7 +91,8 @@
       this.subtitlesLoaded = false;
       this.currentFileName = "";
       this.autoLoadInProgress = false;
-      this.lastVideoId = null;
+      this.lastVideoId = "";
+      this._navigationSeq = 0;
 
       this._timeUpdateHandler = null;
       this._seekHandler = null;
@@ -62,10 +100,14 @@
       this._playHandler = null;
       this._rateHandler = null;
       this._keydownHandler = null;
+      this._messageListener = null;
+      this._storageListener = null;
+      this._dragDropHandlers = null;
 
-      this._videoInterval = null;
+      this._watcherInterval = null;
       this._controlsInterval = null;
       this._toastTimeout = null;
+      this._navDebounceTimeout = null;
 
       this._isInitialized = false;
       this._buttonPath = null;
@@ -79,7 +121,7 @@
       this._settings = {
         fontSize: 18,
         fontFamily: "'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
-        position: "bottom", // 'bottom' | 'lowerThird' | 'middle' | 'top' | 'custom'
+        position: "bottom", // 'bottom' | 'lowerThird' | 'middle' | 'top'
         verticalOffset: 60,
         opacity: 80,
         bgColor: "#000000",
@@ -97,11 +139,11 @@
       this._isInitialized = true;
 
       this.injectStyles();
-      this.waitForVideo();
+      this.loadSyncSettings();
       this.listenForMessages();
       this.listenForStorageChanges();
       this.setupKeyboardShortcuts();
-      this.setupPlayerButton();
+      this.startWatcher();
     }
 
     injectStyles() {
@@ -218,55 +260,137 @@
       document.head.appendChild(style);
     }
 
-    waitForVideo() {
-      if (this._videoInterval) {
-        clearInterval(this._videoInterval);
-        this._videoInterval = null;
+    getCurrentVideoId() {
+      return extractVideoId(window.location.href);
+    }
+
+    loadSyncSettings() {
+      if (!isContextValid()) return;
+      try {
+        chrome.storage.sync.get(["subtitleSettings", "subtitlesEnabled"], (result) => {
+          if (!isContextValid()) return;
+          try {
+            if (chrome.runtime.lastError) {
+              this.applySettings();
+              this.updateButtonState();
+              return;
+            }
+            if (result && result.subtitleSettings) {
+              // Exclude timeOffset from global sync settings (timeOffset is per-video)
+              const { timeOffset, ...syncSettings } = result.subtitleSettings;
+              this._settings = { ...this._settings, ...syncSettings };
+            }
+            if (result && result.subtitlesEnabled !== undefined) {
+              this.subtitlesEnabled = result.subtitlesEnabled;
+            }
+            this.applySettings();
+            this.updateButtonState();
+          } catch (_) {}
+        });
+      } catch (_) {}
+    }
+
+    startWatcher() {
+      if (this._watcherInterval) {
+        clearInterval(this._watcherInterval);
+        this._watcherInterval = null;
       }
 
-      let attempts = 0;
-      this._videoInterval = setInterval(() => {
-        // If extension context has been invalidated, auto-terminate gracefully
+      this.checkState();
+
+      this._watcherInterval = setInterval(() => {
         if (!isContextValid()) {
           this.cleanup();
           return;
         }
-
-        attempts++;
-        const videoEl = document.querySelector("video");
-
-        if (videoEl && videoEl !== this.video) {
-          this.video = videoEl;
-          this.playerContainer = document.querySelector("#movie_player, .html5-video-player");
-          this.setupSubtitleDisplay();
-          this.setupDragAndDrop();
-          this.setupHudToast();
-          this._attachVideoListeners();
-
-          const currentVideoId = this.getCurrentVideoId();
-          this.lastVideoId = currentVideoId;
-          setTimeout(() => this.checkAutoLoadAndCache(), 500);
-        } else if (videoEl && videoEl === this.video) {
-          const currentVideoId = this.getCurrentVideoId();
-          if (currentVideoId && currentVideoId !== this.lastVideoId) {
-            this.lastVideoId = currentVideoId;
-            setTimeout(() => this.checkAutoLoadAndCache(), 500);
-          }
-        }
-
-        if (attempts >= 25 && this.video) {
-          clearInterval(this._videoInterval);
-          this._videoInterval = null;
-        }
-      }, 500);
+        this.checkState();
+      }, 400);
     }
 
-    getCurrentVideoId() {
-      try {
-        const urlParams = new URLSearchParams(window.location.search);
-        return urlParams.get("v") || "";
-      } catch (_) {
-        return "";
+    checkState() {
+      if (!isContextValid()) return;
+
+      const currentVideoId = this.getCurrentVideoId();
+      if (currentVideoId !== this.lastVideoId) {
+        this.handleVideoChange(currentVideoId);
+      }
+
+      const videoEl = document.querySelector("video");
+      if (videoEl && videoEl !== this.video) {
+        this.video = videoEl;
+        this.playerContainer = document.querySelector("#movie_player, .html5-video-player");
+        this._attachVideoListeners();
+        this.ensureDomElements();
+      } else if (this.video && !document.contains(this.video)) {
+        this.video = null;
+      }
+
+      this.ensureDomElements();
+    }
+
+    ensureDomElements() {
+      if (!this.playerContainer || !document.contains(this.playerContainer)) {
+        this.playerContainer = document.querySelector("#movie_player, .html5-video-player");
+      }
+
+      if (this.playerContainer) {
+        this.playerContainer.style.position = "relative";
+
+        if (!this.subtitleElement || !this.playerContainer.contains(this.subtitleElement)) {
+          this.setupSubtitleDisplay();
+        }
+        if (!this.dropOverlay || !this.playerContainer.contains(this.dropOverlay)) {
+          this.setupDragAndDrop();
+        }
+        if (!this.hudToast || !this.playerContainer.contains(this.hudToast)) {
+          this.setupHudToast();
+        }
+      }
+
+      if (!this.toggleButton || !document.contains(this.toggleButton)) {
+        const rightControls = document.querySelector(".ytp-right-controls");
+        if (rightControls) {
+          this.injectToggleButton(rightControls);
+        }
+      }
+    }
+
+    handleVideoChange(newVideoId) {
+      if (newVideoId === this.lastVideoId) return;
+
+      // 1. Ensure latest adjustments for previous video were saved before switching
+      if (this.lastVideoId && this.subtitlesLoaded && this.rawSrtContent) {
+        this.saveCurrentCache(this.lastVideoId);
+      }
+
+      // 2. Increment navigation sequence to cancel any in-flight async operations
+      this._navigationSeq++;
+      const seq = this._navigationSeq;
+      this.lastVideoId = newVideoId;
+
+      // 3. Immediately clear all subtitles from previous video so nothing incorrect displays
+      this.subtitles = [];
+      this.rawSrtContent = "";
+      this.subtitlesLoaded = false;
+      this.currentSubtitleKey = "";
+      this.currentFileName = "";
+      this._settings.timeOffset = 0.0;
+      this._customPos = null;
+      this.hideSubtitle();
+      this.updateButtonState();
+      this.applySettings();
+
+      // Notify any open popup that subtitles are cleared for the new video link
+      this.broadcastStatus();
+
+      // 4. If newVideoId is valid, restore subtitles for this video
+      if (newVideoId) {
+        clearTimeout(this._navDebounceTimeout);
+        this._navDebounceTimeout = setTimeout(() => {
+          if (this._navigationSeq === seq && this.getCurrentVideoId() === newVideoId) {
+            this.checkAutoLoadAndCache(newVideoId, seq);
+          }
+        }, 300);
       }
     }
 
@@ -314,29 +438,7 @@
       this.subtitleElement.className = "subly-custom-subtitle";
 
       this.setupDraggableSubtitles();
-
-      if (isContextValid()) {
-        try {
-          chrome.storage.sync.get(["subtitleSettings", "subtitlesEnabled"], (result) => {
-            if (!isContextValid()) return;
-            try {
-              if (chrome.runtime.lastError) {
-                this.applySettings();
-                this.updateButtonState();
-                return;
-              }
-              if (result && result.subtitleSettings) {
-                this._settings = { ...this._settings, ...result.subtitleSettings };
-              }
-              if (result && result.subtitlesEnabled !== undefined) {
-                this.subtitlesEnabled = result.subtitlesEnabled;
-              }
-              this.applySettings();
-              this.updateButtonState();
-            } catch (_) {}
-          });
-        } catch (_) {}
-      }
+      this.applySettings();
 
       if (this.playerContainer) {
         this.playerContainer.style.position = "relative";
@@ -405,12 +507,14 @@
     }
 
     setupDragAndDrop() {
+      this._cleanupDragAndDrop();
+
+      if (!this.playerContainer) return;
+
       const oldOverlays = document.querySelectorAll("#subly-drop-overlay");
       oldOverlays.forEach((el) => {
         try { el.remove(); } catch (_) {}
       });
-
-      if (!this.playerContainer) return;
 
       this.dropOverlay = document.createElement("div");
       this.dropOverlay.id = "subly-drop-overlay";
@@ -472,6 +576,7 @@
         const reader = new FileReader();
         reader.onload = (event) => {
           const content = event.target.result;
+          this._settings.timeOffset = 0.0;
           this.loadSubtitles(content, file.name, true);
           this.showToast(`✓ Loaded: ${file.name} (${this.subtitles.length} cues)`);
         };
@@ -485,6 +590,27 @@
       this.playerContainer.addEventListener("dragover", onDragOver);
       this.playerContainer.addEventListener("dragleave", onDragLeave);
       this.playerContainer.addEventListener("drop", onDrop);
+
+      this._dragDropHandlers = {
+        container: this.playerContainer,
+        onDragEnter,
+        onDragOver,
+        onDragLeave,
+        onDrop,
+      };
+    }
+
+    _cleanupDragAndDrop() {
+      if (this._dragDropHandlers && this._dragDropHandlers.container) {
+        const { container, onDragEnter, onDragOver, onDragLeave, onDrop } = this._dragDropHandlers;
+        try {
+          container.removeEventListener("dragenter", onDragEnter);
+          container.removeEventListener("dragover", onDragOver);
+          container.removeEventListener("dragleave", onDragLeave);
+          container.removeEventListener("drop", onDrop);
+        } catch (_) {}
+      }
+      this._dragDropHandlers = null;
     }
 
     setupHudToast() {
@@ -501,7 +627,9 @@
     }
 
     showToast(message, icon = "⚡", duration = 1800) {
-      if (!this.hudToast) this.setupHudToast();
+      if (!this.hudToast || !document.contains(this.hudToast)) {
+        this.setupHudToast();
+      }
       if (!this.hudToast) return;
 
       clearTimeout(this._toastTimeout);
@@ -514,32 +642,6 @@
       this._toastTimeout = setTimeout(() => {
         if (this.hudToast) this.hudToast.classList.remove("visible");
       }, duration);
-    }
-
-    setupPlayerButton() {
-      if (this._controlsInterval) {
-        clearInterval(this._controlsInterval);
-        this._controlsInterval = null;
-      }
-
-      let attempts = 0;
-      this._controlsInterval = setInterval(() => {
-        if (!isContextValid()) {
-          this.cleanup();
-          return;
-        }
-
-        attempts++;
-        const rightControls = document.querySelector(".ytp-right-controls");
-        if (rightControls) {
-          clearInterval(this._controlsInterval);
-          this._controlsInterval = null;
-          this.injectToggleButton(rightControls);
-        } else if (attempts >= 15) {
-          clearInterval(this._controlsInterval);
-          this._controlsInterval = null;
-        }
-      }, 400);
     }
 
     injectToggleButton(rightControls) {
@@ -619,6 +721,8 @@
           chrome.storage.sync.set({ subtitlesEnabled: this.subtitlesEnabled }).catch(() => {});
         } catch (_) {}
       }
+
+      this.broadcastStatus();
     }
 
     updateButtonState() {
@@ -681,75 +785,103 @@
 
     listenForMessages() {
       if (!isContextValid()) return;
-      try {
-        chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-          if (!isContextValid()) return;
-          try {
-            if (message.action === "loadSubtitles") {
-              this.loadSubtitles(message.srtContent, message.fileName, message.saveCache !== false);
-              sendResponse({ success: true, count: this.subtitles.length });
-            } else if (message.action === "unloadSubtitles") {
-              this.unloadSubtitles();
-              sendResponse({ success: true });
-            } else if (message.action === "updateSettings") {
-              this.updateSettings(message.settings, true);
-              sendResponse({ success: true });
-            } else if (message.action === "adjustTimeOffset") {
-              this.adjustTimeOffset(message.delta);
-              sendResponse({ success: true, offset: this._settings.timeOffset });
-            } else if (message.action === "resetTimeOffset") {
-              this.resetTimeOffset();
-              sendResponse({ success: true, offset: 0 });
-            } else if (message.action === "toggleSubtitles") {
-              this.toggleSubtitles();
-              sendResponse({ success: true, enabled: this.subtitlesEnabled });
-            } else if (message.action === "seekToTime") {
-              this.seekToTime(message.seconds);
-              sendResponse({ success: true });
-            } else if (message.action === "getStatus") {
-              sendResponse({
-                success: true,
-                subtitlesLoaded: this.subtitlesLoaded,
-                subtitlesEnabled: this.subtitlesEnabled,
-                subtitlesCount: this.subtitles.length,
-                fileName: this.currentFileName,
-                timeOffset: this._settings.timeOffset || 0,
-                currentTime: this.video ? this.video.currentTime : 0,
-                settings: this._settings,
-                subtitles: this.subtitles.slice(0, 1000),
-              });
-            }
-          } catch (error) {
-            sendResponse({ success: false, error: error.message });
+      if (this._messageListener) {
+        try {
+          chrome.runtime.onMessage.removeListener(this._messageListener);
+        } catch (_) {}
+      }
+
+      this._messageListener = (message, sender, sendResponse) => {
+        if (!isContextValid()) return;
+        try {
+          if (message.action === "loadSubtitles") {
+            this.loadSubtitles(message.srtContent, message.fileName, message.saveCache !== false);
+            sendResponse({ success: true, count: this.subtitles.length });
+          } else if (message.action === "unloadSubtitles") {
+            this.unloadSubtitles();
+            sendResponse({ success: true });
+          } else if (message.action === "updateSettings") {
+            this.updateSettings(message.settings, true);
+            sendResponse({ success: true });
+          } else if (message.action === "adjustTimeOffset") {
+            this.adjustTimeOffset(message.delta);
+            sendResponse({ success: true, offset: this._settings.timeOffset });
+          } else if (message.action === "resetTimeOffset") {
+            this.resetTimeOffset();
+            sendResponse({ success: true, offset: 0 });
+          } else if (message.action === "toggleSubtitles") {
+            this.toggleSubtitles();
+            sendResponse({ success: true, enabled: this.subtitlesEnabled });
+          } else if (message.action === "seekToTime") {
+            this.seekToTime(message.seconds);
+            sendResponse({ success: true });
+          } else if (message.action === "getStatus") {
+            sendResponse({
+              success: true,
+              videoId: this.getCurrentVideoId(),
+              subtitlesLoaded: this.subtitlesLoaded,
+              subtitlesEnabled: this.subtitlesEnabled,
+              subtitlesCount: this.subtitles.length,
+              fileName: this.currentFileName,
+              timeOffset: this._settings.timeOffset || 0,
+              currentTime: this.video ? this.video.currentTime : 0,
+              settings: this._settings,
+              subtitles: this.subtitles.slice(0, 1000),
+            });
           }
-          return true;
-        });
+        } catch (error) {
+          sendResponse({ success: false, error: error.message });
+        }
+        return true;
+      };
+
+      try {
+        chrome.runtime.onMessage.addListener(this._messageListener);
       } catch (_) {}
     }
 
     listenForStorageChanges() {
       if (!isContextValid()) return;
+      if (this._storageListener) {
+        try {
+          chrome.storage.onChanged.removeListener(this._storageListener);
+        } catch (_) {}
+      }
+
+      this._storageListener = (changes, area) => {
+        if (!isContextValid() || area !== "sync") return;
+        try {
+          if (changes.subtitleSettings) {
+            const { timeOffset, ...syncSettings } = changes.subtitleSettings.newValue || {};
+            this._settings = { ...this._settings, ...syncSettings };
+            this.applySettings();
+          }
+          if (changes.subtitlesEnabled) {
+            this.subtitlesEnabled = changes.subtitlesEnabled.newValue !== false;
+            this.updateButtonState();
+            this.applySettings();
+            if (!this.subtitlesEnabled) this.hideSubtitle();
+            else this.updateSubtitles();
+          }
+        } catch (_) {}
+      };
+
       try {
-        chrome.storage.onChanged.addListener((changes, area) => {
-          if (!isContextValid() || area !== "sync") return;
-          try {
-            if (changes.subtitleSettings) {
-              this._settings = { ...this._settings, ...changes.subtitleSettings.newValue };
-              this.applySettings();
-            }
-            if (changes.subtitlesEnabled) {
-              this.subtitlesEnabled = changes.subtitlesEnabled.newValue !== false;
-              this.updateButtonState();
-              this.applySettings();
-              if (!this.subtitlesEnabled) this.hideSubtitle();
-            }
-          } catch (_) {}
-        });
+        chrome.storage.onChanged.addListener(this._storageListener);
       } catch (_) {}
     }
 
-    loadSubtitles(srtContent, fileName = "", saveToCache = true) {
+    loadSubtitles(srtContent, fileName = "", saveToCache = true, targetVideoId = null) {
       try {
+        const currentVideoId = this.getCurrentVideoId();
+        // If targetVideoId is specified, ensure it matches current video before loading
+        if (targetVideoId && currentVideoId && targetVideoId !== currentVideoId) {
+          console.warn("Subly: Aborting load for mismatched video:", targetVideoId, "current:", currentVideoId);
+          return;
+        }
+
+        const videoIdToUse = targetVideoId || currentVideoId || this.lastVideoId;
+
         this.subtitles = [];
         this.currentSubtitleKey = "";
         this.subtitlesLoaded = false;
@@ -764,49 +896,107 @@
         this.subtitles = parser.parse(srtContent);
         this.subtitlesLoaded = this.subtitles.length > 0;
         this.currentFileName = fileName || "subtitles.srt";
+        this.rawSrtContent = srtContent;
 
         if (this.subtitlesLoaded) {
           this.subtitles.sort((a, b) => a.startTime - b.startTime);
           this.applySettings();
           this.updateSubtitles();
 
-          if (saveToCache && this.lastVideoId && isContextValid()) {
-            const cacheData = {
-              videoId: this.lastVideoId,
-              fileName: this.currentFileName,
-              content: srtContent,
-              offset: this._settings.timeOffset || 0,
-              savedAt: Date.now(),
-            };
-            try {
-              chrome.storage.local.set({ [`subly_cache_${this.lastVideoId}`]: cacheData }).catch(() => {});
-            } catch (_) {}
+          if (saveToCache && videoIdToUse && isContextValid()) {
+            this.saveCurrentCache(videoIdToUse);
+            this.pruneOldCache();
           }
         }
 
         this.updateButtonState();
+        this.broadcastStatus();
       } catch (error) {
         console.error("Subly: Load error:", error);
         this.subtitlesLoaded = false;
         this.updateButtonState();
+        this.broadcastStatus();
       }
     }
 
+    saveCurrentCache(targetVideoId = null) {
+      const videoId = targetVideoId || this.getCurrentVideoId() || this.lastVideoId;
+      if (!videoId || !this.subtitlesLoaded || !this.rawSrtContent || !isContextValid()) {
+        return;
+      }
+
+      const cacheData = {
+        videoId: videoId,
+        fileName: this.currentFileName || "subtitles.srt",
+        content: this.rawSrtContent,
+        offset: this._settings.timeOffset || 0,
+        savedAt: Date.now(),
+      };
+
+      try {
+        chrome.storage.local.set({ [`subly_cache_${videoId}`]: cacheData }).catch(() => {});
+      } catch (_) {}
+    }
+
     unloadSubtitles() {
+      const videoId = this.getCurrentVideoId() || this.lastVideoId;
       this.subtitles = [];
+      this.rawSrtContent = "";
       this.subtitlesLoaded = false;
       this.currentSubtitleKey = "";
       this.currentFileName = "";
+      this._settings.timeOffset = 0.0;
+      this._customPos = null;
       this.hideSubtitle();
       this.updateButtonState();
       this.applySettings();
 
-      if (this.lastVideoId && isContextValid()) {
+      if (videoId && isContextValid()) {
         try {
-          chrome.storage.local.remove([`subly_cache_${this.lastVideoId}`]).catch(() => {});
+          // Explicitly mark as unloaded so preset subtitles will not be auto-restored
+          chrome.storage.local.set({
+            [`subly_cache_${videoId}`]: {
+              videoId: videoId,
+              unloaded: true,
+              savedAt: Date.now(),
+            },
+          }).catch(() => {});
         } catch (_) {}
       }
       this.showToast("Subtitles Unloaded");
+      this.broadcastStatus();
+    }
+
+    broadcastStatus() {
+      if (!isContextValid()) return;
+      try {
+        chrome.runtime.sendMessage({
+          action: "sublyStatusChanged",
+          videoId: this.getCurrentVideoId(),
+          subtitlesLoaded: this.subtitlesLoaded,
+          subtitlesEnabled: this.subtitlesEnabled,
+          fileName: this.currentFileName,
+          timeOffset: this._settings.timeOffset || 0,
+          subtitlesCount: this.subtitles.length,
+        }).catch(() => {});
+      } catch (_) {}
+    }
+
+    async pruneOldCache() {
+      if (!isContextValid()) return;
+      try {
+        const all = await chrome.storage.local.get(null);
+        const sublyKeys = Object.keys(all).filter((k) => k.startsWith("subly_cache_"));
+        if (sublyKeys.length > 60) {
+          const items = sublyKeys.map((k) => ({
+            key: k,
+            savedAt: all[k]?.savedAt || 0,
+          }));
+          items.sort((a, b) => a.savedAt - b.savedAt);
+          const keysToRemove = items.slice(0, items.length - 50).map((i) => i.key);
+          await chrome.storage.local.remove(keysToRemove);
+        }
+      } catch (_) {}
     }
 
     isAdPlaying() {
@@ -1010,30 +1200,52 @@
 
       if (isContextValid()) {
         try {
-          chrome.storage.sync.set({ subtitleSettings: this._settings }).catch(() => {});
+          const { timeOffset, ...syncSettings } = this._settings;
+          chrome.storage.sync.set({ subtitleSettings: syncSettings }).catch(() => {});
         } catch (_) {}
+      }
+
+      if (this.subtitlesLoaded && this.rawSrtContent) {
+        this.saveCurrentCache();
       }
 
       if (notify) {
         this.updateSubtitles();
       }
+
+      this.broadcastStatus();
     }
 
     adjustTimeOffset(delta) {
       const newOffset = Math.round(((this._settings.timeOffset || 0) + delta) * 10) / 10;
       this._settings.timeOffset = newOffset;
-      this.updateSettings({ timeOffset: newOffset });
+      this.applySettings();
+      this.updateButtonState();
       this.updateSubtitles();
+
+      // Persist the updated timing offset specifically for this YouTube video link!
+      if (this.subtitlesLoaded && this.rawSrtContent) {
+        this.saveCurrentCache();
+      }
 
       const sign = newOffset > 0 ? "+" : "";
       this.showToast(`Sync: ${sign}${newOffset.toFixed(1)}s (${delta > 0 ? "+" : ""}${delta}s)`);
+      this.broadcastStatus();
     }
 
     resetTimeOffset() {
-      this._settings.timeOffset = 0;
-      this.updateSettings({ timeOffset: 0 });
+      this._settings.timeOffset = 0.0;
+      this.applySettings();
+      this.updateButtonState();
       this.updateSubtitles();
+
+      // Persist the reset timing offset for this video link!
+      if (this.subtitlesLoaded && this.rawSrtContent) {
+        this.saveCurrentCache();
+      }
+
       this.showToast("Sync reset to 0.0s");
+      this.broadcastStatus();
     }
 
     seekToTime(seconds) {
@@ -1124,45 +1336,81 @@
       document.addEventListener("keydown", this._keydownHandler);
     }
 
-    async checkAutoLoadAndCache() {
-      if (this.autoLoadInProgress || !isContextValid()) return;
+    async checkAutoLoadAndCache(targetVideoId, seq) {
+      if (!targetVideoId) {
+        targetVideoId = this.getCurrentVideoId();
+      }
+      if (!targetVideoId || !isContextValid()) return;
+      if (seq === undefined) seq = this._navigationSeq;
+
+      // Honor the autoRestore setting
+      if (this._settings.autoRestore === false) {
+        return;
+      }
+
       this.autoLoadInProgress = true;
 
       try {
-        const videoId = this.getCurrentVideoId();
-        if (!videoId) return;
-
-        const cacheKey = `subly_cache_${videoId}`;
+        const cacheKey = `subly_cache_${targetVideoId}`;
         let cacheResult = null;
         try {
           cacheResult = await chrome.storage.local.get([cacheKey]);
         } catch (_) {}
 
-        if (cacheResult && cacheResult[cacheKey] && cacheResult[cacheKey].content) {
-          const item = cacheResult[cacheKey];
-          if (item.offset !== undefined) {
-            this._settings.timeOffset = item.offset;
-          }
-          this.loadSubtitles(item.content, item.fileName || "cached.srt", false);
-          this.showToast(`Auto-restored: ${item.fileName || "subtitles"}`);
+        // Strict verification: Abort if user navigated to a different video while waiting
+        if (seq !== this._navigationSeq || this.getCurrentVideoId() !== targetVideoId || !isContextValid()) {
           return;
         }
 
+        const item = cacheResult ? cacheResult[cacheKey] : null;
+
+        // If user explicitly unloaded subtitles for this video, do NOT auto-restore or load presets
+        if (item && item.unloaded) {
+          return;
+        }
+
+        // 1. Check local cache
+        if (item && item.content) {
+          const savedOffset = typeof item.offset === "number" ? item.offset : 0.0;
+          this._settings.timeOffset = savedOffset;
+          this.loadSubtitles(item.content, item.fileName || "cached.srt", false, targetVideoId);
+          this.showToast(`Auto-restored: ${item.fileName || "subtitles"}`);
+          this.broadcastStatus();
+          return;
+        }
+
+        // 2. If no cache exists, check preset mappings in config.json
         const config = await this.fetchConfig();
-        if (config?.videoMappings && config.videoMappings[videoId]) {
-          const srtUrl = config.videoMappings[videoId];
-          const response = await fetch(srtUrl);
-          if (response.ok) {
-            const content = await response.text();
-            if (content.includes("-->")) {
-              const fileName = srtUrl.split("/").pop().replace(/%20/g, " ") || "preset.srt";
-              this.loadSubtitles(content, fileName, true);
-              this.showToast(`Preset loaded: ${fileName}`);
+
+        // Check again after async fetch
+        if (seq !== this._navigationSeq || this.getCurrentVideoId() !== targetVideoId || !isContextValid()) {
+          return;
+        }
+
+        if (config?.videoMappings && config.videoMappings[targetVideoId]) {
+          const srtUrl = config.videoMappings[targetVideoId];
+          try {
+            const response = await fetch(srtUrl);
+            if (response.ok) {
+              const content = await response.text();
+
+              // Check again after fetching subtitle text
+              if (seq !== this._navigationSeq || this.getCurrentVideoId() !== targetVideoId || !isContextValid()) {
+                return;
+              }
+
+              if (content.includes("-->")) {
+                const fileName = srtUrl.split("/").pop().replace(/%20/g, " ") || "preset.srt";
+                this._settings.timeOffset = 0.0;
+                this.loadSubtitles(content, fileName, true, targetVideoId);
+                this.showToast(`Preset loaded: ${fileName}`);
+                this.broadcastStatus();
+              }
             }
-          }
+          } catch (_) {}
         }
       } catch (error) {
-        // Silently ignore if context was invalidated
+        // Silently ignore navigation interrupts
       } finally {
         this.autoLoadInProgress = false;
       }
@@ -1182,9 +1430,9 @@
     cleanup() {
       this._cleanupVideoListeners();
 
-      if (this._videoInterval) {
-        clearInterval(this._videoInterval);
-        this._videoInterval = null;
+      if (this._watcherInterval) {
+        clearInterval(this._watcherInterval);
+        this._watcherInterval = null;
       }
       if (this._controlsInterval) {
         clearInterval(this._controlsInterval);
@@ -1194,10 +1442,30 @@
         clearTimeout(this._toastTimeout);
         this._toastTimeout = null;
       }
+      if (this._navDebounceTimeout) {
+        clearTimeout(this._navDebounceTimeout);
+        this._navDebounceTimeout = null;
+      }
       if (this._keydownHandler) {
         document.removeEventListener("keydown", this._keydownHandler);
         this._keydownHandler = null;
       }
+
+      if (this._messageListener && typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
+        try {
+          chrome.runtime.onMessage.removeListener(this._messageListener);
+        } catch (_) {}
+        this._messageListener = null;
+      }
+
+      if (this._storageListener && typeof chrome !== "undefined" && chrome.storage?.onChanged) {
+        try {
+          chrome.storage.onChanged.removeListener(this._storageListener);
+        } catch (_) {}
+        this._storageListener = null;
+      }
+
+      this._cleanupDragAndDrop();
 
       const elementsToRemove = document.querySelectorAll(
         "#custom-subtitles, .subly-custom-subtitle, #subly-drop-overlay, #subly-hud-toast, #subly-toggle-button"
@@ -1213,57 +1481,31 @@
       this.hudToast = null;
       this.toggleButton = null;
       this.subtitles = [];
+      this.rawSrtContent = "";
       this.subtitlesLoaded = false;
       this.autoLoadInProgress = false;
       this._isInitialized = false;
     }
   }
 
-  // 4. Navigation management with strict debounce and zero heavy observers
-  let initTimer = null;
-  let lastUrl = location.href;
+  // 4. Reactive SPA YouTube Navigation Event Handling
+  function handleNavigation() {
+    if (!isContextValid()) return;
 
-  function initializeSubly() {
-    if (initTimer) {
-      clearTimeout(initTimer);
-      initTimer = null;
+    if (window.__subly_instance) {
+      window.__subly_instance.checkState();
+    } else {
+      window.__subly_instance = new YouTubeSubtitleInjector();
     }
-
-    initTimer = setTimeout(() => {
-      initTimer = null;
-
-      if (!location.pathname.startsWith("/watch") && !document.querySelector("video")) {
-        return;
-      }
-
-      if (window.__subly_instance) {
-        try {
-          window.__subly_instance.cleanup();
-        } catch (_) {}
-        window.__subly_instance = null;
-      }
-
-      if (isContextValid()) {
-        window.__subly_instance = new YouTubeSubtitleInjector();
-      }
-    }, 200);
   }
 
-  document.addEventListener("yt-navigate-finish", () => {
-    lastUrl = location.href;
-    initializeSubly();
-  });
-
-  window.addEventListener("popstate", () => {
-    if (location.href !== lastUrl) {
-      lastUrl = location.href;
-      initializeSubly();
-    }
-  });
+  document.addEventListener("yt-navigate-finish", handleNavigation);
+  document.addEventListener("yt-page-data-updated", handleNavigation);
+  window.addEventListener("popstate", handleNavigation);
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initializeSubly);
+    document.addEventListener("DOMContentLoaded", handleNavigation);
   } else {
-    initializeSubly();
+    handleNavigation();
   }
 })();

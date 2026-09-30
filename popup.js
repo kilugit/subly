@@ -1,7 +1,19 @@
 /**
  * Subly - Popup Controller
- * Version 2.0.2 - English Only
+ * Version 2.0.4 - Resilient YouTube Link Sync & Auto-Restore
  */
+
+function extractVideoId(urlString) {
+  try {
+    const url = new URL(urlString, "https://www.youtube.com");
+    const v = url.searchParams.get("v");
+    if (v && /^[a-zA-Z0-9_-]+$/.test(v)) return v;
+
+    const pathMatch = url.pathname.match(/\/(?:shorts|embed|live|v)\/([a-zA-Z0-9_-]+)/);
+    if (pathMatch && pathMatch[1]) return pathMatch[1];
+  } catch (_) {}
+  return "";
+}
 
 class PopupController {
   constructor() {
@@ -78,6 +90,8 @@ class PopupController {
     this.bgColor = document.getElementById("bgColor");
     this.textSwatches = document.querySelectorAll(".swatch[data-color]");
     this.bgSwatches = document.querySelectorAll(".swatch[data-bg]");
+    this.autoRestoreCheck = document.getElementById("autoRestoreCheck");
+    this.autoRestoreVal = document.getElementById("autoRestoreVal");
 
     // Tab 4: Search
     this.cueSearchInput = document.getElementById("cueSearchInput");
@@ -174,6 +188,14 @@ class PopupController {
       this.updateSetting("bgColor", e.target.value)
     );
 
+    if (this.autoRestoreCheck) {
+      this.autoRestoreCheck.addEventListener("change", (e) => {
+        const isChecked = e.target.checked;
+        if (this.autoRestoreVal) this.autoRestoreVal.textContent = isChecked ? "ON" : "OFF";
+        this.updateSetting("autoRestore", isChecked);
+      });
+    }
+
     // Color swatches
     this.textSwatches.forEach((swatch) => {
       swatch.addEventListener("click", () => {
@@ -193,6 +215,23 @@ class PopupController {
 
     // Cue Search
     this.cueSearchInput.addEventListener("input", () => this.filterCues());
+
+    // Auto-update popup when YouTube link / tab changes or content script broadcasts status
+    if (typeof chrome !== "undefined" && chrome.tabs?.onUpdated) {
+      chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+        if (this.activeTab && this.activeTab.id === tabId && changeInfo.url) {
+          this.checkCurrentTabStatus();
+        }
+      });
+    }
+
+    if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
+      chrome.runtime.onMessage.addListener((message) => {
+        if (message.action === "sublyStatusChanged") {
+          this.checkCurrentTabStatus();
+        }
+      });
+    }
   }
 
   switchTab(tabId) {
@@ -294,6 +333,7 @@ class PopupController {
         this.showStatus(`✓ Successfully loaded ${count} subtitle cues!`, "success");
         this.updateLoadedCard(fileName, count, this.settings.timeOffset);
         this.updatePowerButtonUI(true);
+        this.presetNotice.classList.remove("visible");
       } else {
         throw new Error(res?.error || "Load failed");
       }
@@ -322,10 +362,16 @@ class PopupController {
       this.selectedFile = null;
       this.srtContent = null;
       this.loadedSubtitles = [];
+      this.settings.timeOffset = 0.0;
+      this.updateSyncDisplay(0.0);
       this.dropPrimary.textContent = "Click or drag subtitle file here";
       this.loadBtn.disabled = true;
       this.populateCuesList();
       this.showStatus("Subtitles unloaded successfully", "info");
+
+      if (tab?.url) {
+        this.checkPresetMapping(tab.url);
+      }
     } catch (_) {}
   }
 
@@ -340,35 +386,37 @@ class PopupController {
 
   /* ================= TAB 2: SYNC CONTROLS ================= */
   async adjustSync(delta) {
-    const newOffset = Math.round(((this.settings.timeOffset || 0) + delta) * 10) / 10;
-    this.settings.timeOffset = newOffset;
-    this.updateSyncDisplay(newOffset);
-
     try {
       const tab = await this.getActiveTab();
       if (tab?.id) {
-        await this.sendMessage(tab.id, { action: "adjustTimeOffset", delta: delta });
+        const res = await this.sendMessage(tab.id, { action: "adjustTimeOffset", delta: delta });
+        if (res?.success && typeof res.offset === "number") {
+          this.settings.timeOffset = res.offset;
+          this.updateSyncDisplay(res.offset);
+        }
       }
     } catch (_) {}
   }
 
   async resetSync() {
-    this.settings.timeOffset = 0;
-    this.updateSyncDisplay(0);
-
     try {
       const tab = await this.getActiveTab();
       if (tab?.id) {
-        await this.sendMessage(tab.id, { action: "resetTimeOffset" });
+        const res = await this.sendMessage(tab.id, { action: "resetTimeOffset" });
+        if (res?.success && typeof res.offset === "number") {
+          this.settings.timeOffset = res.offset;
+          this.updateSyncDisplay(res.offset);
+        }
       }
     } catch (_) {}
   }
 
   updateSyncDisplay(offset) {
-    const sign = offset > 0 ? "+" : "";
-    this.syncValue.textContent = `${sign}${offset.toFixed(2)}s`;
-    this.syncValue.classList.toggle("negative", offset < 0);
-    this.loadedOffset.textContent = `Sync: ${sign}${offset.toFixed(1)}s`;
+    const safeOffset = typeof offset === "number" ? offset : 0;
+    const sign = safeOffset > 0 ? "+" : "";
+    this.syncValue.textContent = `${sign}${safeOffset.toFixed(2)}s`;
+    this.syncValue.classList.toggle("negative", safeOffset < 0);
+    this.loadedOffset.textContent = `Sync: ${sign}${safeOffset.toFixed(1)}s`;
   }
 
   /* ================= TAB 3: STYLING CONTROLS ================= */
@@ -379,7 +427,9 @@ class PopupController {
     clearTimeout(this._updateTimeout);
     this._updateTimeout = setTimeout(async () => {
       try {
-        await chrome.storage.sync.set({ subtitleSettings: this.settings });
+        // Exclude timeOffset from sync storage (timeOffset is per-video)
+        const { timeOffset, ...syncSettings } = this.settings;
+        await chrome.storage.sync.set({ subtitleSettings: syncSettings });
         const tab = await this.getActiveTab();
         if (tab?.url?.includes("youtube.com")) {
           await this.sendMessage(tab.id, { action: "updateSettings", settings: this.settings });
@@ -407,6 +457,14 @@ class PopupController {
 
     this.textColor.value = this.settings.textColor;
     this.bgColor.value = this.settings.bgColor || "#000000";
+
+    if (this.autoRestoreCheck) {
+      const isEnabled = this.settings.autoRestore !== false;
+      this.autoRestoreCheck.checked = isEnabled;
+      if (this.autoRestoreVal) {
+        this.autoRestoreVal.textContent = isEnabled ? "ON" : "OFF";
+      }
+    }
 
     // Update Live Preview box
     if (this.previewSubtitle) {
@@ -524,43 +582,64 @@ class PopupController {
     this.loadedCard.classList.add("visible");
     this.loadedName.textContent = fileName || "subtitles.srt";
     this.loadedCuesCount.textContent = `${count} cues`;
-    const sign = (offset || 0) > 0 ? "+" : "";
-    this.loadedOffset.textContent = `Sync: ${sign}${(offset || 0).toFixed(1)}s`;
+    const safeOffset = typeof offset === "number" ? offset : 0;
+    const sign = safeOffset > 0 ? "+" : "";
+    this.loadedOffset.textContent = `Sync: ${sign}${safeOffset.toFixed(1)}s`;
   }
 
   /* ================= STATUS INITIALIZATION ON OPEN ================= */
   async checkCurrentTabStatus() {
     try {
+      this.activeTab = null;
       const tab = await this.getActiveTab();
-      if (!tab?.url?.includes("youtube.com")) return;
+      if (!tab?.url?.includes("youtube.com")) {
+        this.loadedCard.classList.remove("visible");
+        this.presetNotice.classList.remove("visible");
+        return;
+      }
 
       const res = await this.sendMessage(tab.id, { action: "getStatus" });
       if (res?.success) {
         if (res.settings) {
-          this.settings = { ...this.settings, ...res.settings };
+          const { timeOffset, ...syncSettings } = res.settings;
+          this.settings = { ...this.settings, ...syncSettings };
           this.updateStyleUI();
         }
 
+        this.settings.timeOffset = res.timeOffset || 0.0;
         this.updatePowerButtonUI(res.subtitlesEnabled !== false);
-        this.updateSyncDisplay(res.timeOffset || 0);
+        this.updateSyncDisplay(this.settings.timeOffset);
 
         if (res.subtitlesLoaded) {
           this.loadedSubtitles = res.subtitles || [];
-          this.updateLoadedCard(res.fileName, res.subtitlesCount, res.timeOffset);
+          this.updateLoadedCard(res.fileName, res.subtitlesCount, this.settings.timeOffset);
           this.populateCuesList();
+          this.presetNotice.classList.remove("visible");
         } else {
+          this.loadedCard.classList.remove("visible");
+          this.loadedSubtitles = [];
+          this.populateCuesList();
           this.checkPresetMapping(tab.url);
         }
+      } else {
+        this.loadedCard.classList.remove("visible");
+        this.presetNotice.classList.remove("visible");
       }
-    } catch (_) {}
+    } catch (_) {
+      this.loadedCard.classList.remove("visible");
+      this.presetNotice.classList.remove("visible");
+    }
   }
 
   async checkPresetMapping(url) {
     try {
       const config = await this.fetchConfig();
-      if (!config?.videoMappings) return;
+      if (!config?.videoMappings) {
+        this.presetNotice.classList.remove("visible");
+        return;
+      }
 
-      const videoId = new URLSearchParams(new URL(url).search).get("v");
+      const videoId = extractVideoId(url);
       if (videoId && config.videoMappings[videoId]) {
         this.presetNotice.classList.add("visible");
         this.loadPresetBtn.onclick = async () => {
@@ -570,8 +649,12 @@ class PopupController {
           await this.handleUrlFetch();
           await this.loadSubtitles();
         };
+      } else {
+        this.presetNotice.classList.remove("visible");
       }
-    } catch (_) {}
+    } catch (_) {
+      this.presetNotice.classList.remove("visible");
+    }
   }
 
   async fetchConfig() {
@@ -587,7 +670,8 @@ class PopupController {
     try {
       const result = await chrome.storage.sync.get(["subtitleSettings", "subtitlesEnabled"]);
       if (result.subtitleSettings) {
-        this.settings = { ...this.settings, ...result.subtitleSettings };
+        const { timeOffset, ...syncSettings } = result.subtitleSettings;
+        this.settings = { ...this.settings, ...syncSettings };
       }
       if (result.subtitlesEnabled !== undefined) {
         this.subtitlesEnabled = result.subtitlesEnabled;

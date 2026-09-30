@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Subly - YouTube Subtitle Injector",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "description": "Inject & sync custom SRT and WebVTT subtitles directly into YouTube videos with drag-and-drop, live styling, and timing adjustments!",
   "permissions": ["activeTab", "storage", "tabs", "scripting"],
   "host_permissions": [
