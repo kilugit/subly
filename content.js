@@ -44,19 +44,23 @@
       let search = "";
       let pathname = "";
       if (typeof urlString === "string") {
-        const url = new URL(urlString, window.location.origin);
-        search = url.search;
-        pathname = url.pathname;
+        const qIdx = urlString.indexOf("?");
+        search = qIdx !== -1 ? urlString.slice(qIdx) : "";
+        const hashIdx = search.indexOf("#");
+        if (hashIdx !== -1) search = search.slice(0, hashIdx);
+
+        const pathStart = urlString.indexOf("://");
+        const slashIdx = urlString.indexOf("/", pathStart !== -1 ? pathStart + 3 : 0);
+        pathname = slashIdx !== -1 ? urlString.slice(slashIdx, qIdx !== -1 ? qIdx : undefined) : urlString;
       } else {
         search = window.location.search;
         pathname = window.location.pathname;
       }
 
       // 1. Check ?v= query parameter
-      const params = new URLSearchParams(search);
-      const v = params.get("v");
-      if (v && /^[a-zA-Z0-9_-]+$/.test(v)) {
-        return v;
+      const vMatch = search.match(/[?&]v=([a-zA-Z0-9_-]+)/);
+      if (vMatch && vMatch[1]) {
+        return vMatch[1];
       }
 
       // 2. Check path-based formats: /shorts/ID, /embed/ID, /live/ID, /v/ID
@@ -94,11 +98,10 @@
       this.lastVideoId = "";
       this._navigationSeq = 0;
 
-      this._timeUpdateHandler = null;
-      this._seekHandler = null;
-      this._pauseHandler = null;
-      this._playHandler = null;
-      this._rateHandler = null;
+      this._windowStart = 1;
+      this._windowEnd = 0;
+      this._maxCueDuration = 30;
+      this._updateSubtitlesBound = null;
       this._keydownHandler = null;
       this._messageListener = null;
       this._storageListener = null;
@@ -261,7 +264,12 @@
     }
 
     getCurrentVideoId() {
-      return extractVideoId(window.location.href);
+      return extractVideoId();
+    }
+
+    invalidateCueWindow() {
+      this._windowStart = 1;
+      this._windowEnd = 0;
     }
 
     loadSyncSettings() {
@@ -304,7 +312,7 @@
           return;
         }
         this.checkState();
-      }, 400);
+      }, 1000);
     }
 
     checkState() {
@@ -315,39 +323,39 @@
         this.handleVideoChange(currentVideoId);
       }
 
-      const videoEl = document.querySelector("video");
-      if (videoEl && videoEl !== this.video) {
-        this.video = videoEl;
-        this.playerContainer = document.querySelector("#movie_player, .html5-video-player");
-        this._attachVideoListeners();
-        this.ensureDomElements();
-      } else if (this.video && !document.contains(this.video)) {
-        this.video = null;
+      if (!this.video || !this.video.isConnected) {
+        const videoEl = document.querySelector("video");
+        if (videoEl) {
+          this.video = videoEl;
+          this.playerContainer = document.querySelector("#movie_player, .html5-video-player");
+          this._attachVideoListeners();
+          this.ensureDomElements();
+        }
       }
 
       this.ensureDomElements();
     }
 
     ensureDomElements() {
-      if (!this.playerContainer || !document.contains(this.playerContainer)) {
+      if (!this.playerContainer || !this.playerContainer.isConnected) {
         this.playerContainer = document.querySelector("#movie_player, .html5-video-player");
       }
 
       if (this.playerContainer) {
         this.playerContainer.style.position = "relative";
 
-        if (!this.subtitleElement || !this.playerContainer.contains(this.subtitleElement)) {
+        if (!this.subtitleElement || !this.subtitleElement.isConnected) {
           this.setupSubtitleDisplay();
         }
-        if (!this.dropOverlay || !this.playerContainer.contains(this.dropOverlay)) {
+        if (!this.dropOverlay || !this.dropOverlay.isConnected) {
           this.setupDragAndDrop();
         }
-        if (!this.hudToast || !this.playerContainer.contains(this.hudToast)) {
+        if (!this.hudToast || !this.hudToast.isConnected) {
           this.setupHudToast();
         }
       }
 
-      if (!this.toggleButton || !document.contains(this.toggleButton)) {
+      if (!this.toggleButton || !this.toggleButton.isConnected) {
         const rightControls = document.querySelector(".ytp-right-controls");
         if (rightControls) {
           this.injectToggleButton(rightControls);
@@ -376,6 +384,7 @@
       this.currentFileName = "";
       this._settings.timeOffset = 0.0;
       this._customPos = null;
+      this.invalidateCueWindow();
       this.hideSubtitle();
       this.updateButtonState();
       this.applySettings();
@@ -399,32 +408,25 @@
 
       this._cleanupVideoListeners();
 
-      this._timeUpdateHandler = () => this.updateSubtitles();
-      this._seekHandler = () => this.updateSubtitles();
-      this._pauseHandler = () => this.updateSubtitles();
-      this._playHandler = () => this.updateSubtitles();
-      this._rateHandler = () => this.updateSubtitles();
+      if (!this._updateSubtitlesBound) {
+        this._updateSubtitlesBound = () => this.updateSubtitles();
+      }
 
-      this.video.addEventListener("timeupdate", this._timeUpdateHandler);
-      this.video.addEventListener("seeked", this._seekHandler);
-      this.video.addEventListener("pause", this._pauseHandler);
-      this.video.addEventListener("play", this._playHandler);
-      this.video.addEventListener("ratechange", this._rateHandler);
+      this.video.addEventListener("timeupdate", this._updateSubtitlesBound);
+      this.video.addEventListener("seeked", this._updateSubtitlesBound);
+      this.video.addEventListener("pause", this._updateSubtitlesBound);
+      this.video.addEventListener("play", this._updateSubtitlesBound);
+      this.video.addEventListener("ratechange", this._updateSubtitlesBound);
     }
 
     _cleanupVideoListeners() {
-      if (this.video) {
-        if (this._timeUpdateHandler) this.video.removeEventListener("timeupdate", this._timeUpdateHandler);
-        if (this._seekHandler) this.video.removeEventListener("seeked", this._seekHandler);
-        if (this._pauseHandler) this.video.removeEventListener("pause", this._pauseHandler);
-        if (this._playHandler) this.video.removeEventListener("play", this._playHandler);
-        if (this._rateHandler) this.video.removeEventListener("ratechange", this._rateHandler);
+      if (this.video && this._updateSubtitlesBound) {
+        this.video.removeEventListener("timeupdate", this._updateSubtitlesBound);
+        this.video.removeEventListener("seeked", this._updateSubtitlesBound);
+        this.video.removeEventListener("pause", this._updateSubtitlesBound);
+        this.video.removeEventListener("play", this._updateSubtitlesBound);
+        this.video.removeEventListener("ratechange", this._updateSubtitlesBound);
       }
-      this._timeUpdateHandler = null;
-      this._seekHandler = null;
-      this._pauseHandler = null;
-      this._playHandler = null;
-      this._rateHandler = null;
     }
 
     setupSubtitleDisplay() {
@@ -536,7 +538,7 @@
       let dragCounter = 0;
 
       const onDragEnter = (e) => {
-        if (e.dataTransfer && e.dataTransfer.types && Array.from(e.dataTransfer.types).includes("Files")) {
+        if (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes("Files")) {
           e.preventDefault();
           dragCounter++;
           this.dropOverlay.classList.add("active");
@@ -544,7 +546,7 @@
       };
 
       const onDragOver = (e) => {
-        if (e.dataTransfer && e.dataTransfer.types && Array.from(e.dataTransfer.types).includes("Files")) {
+        if (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes("Files")) {
           e.preventDefault();
           e.dataTransfer.dropEffect = "copy";
         }
@@ -899,8 +901,15 @@
         this.rawSrtContent = srtContent;
 
         if (this.subtitlesLoaded) {
-          this.subtitles.sort((a, b) => a.startTime - b.startTime);
+          let maxDur = 0;
+          for (let i = 0; i < this.subtitles.length; i++) {
+            const dur = this.subtitles[i].endTime - this.subtitles[i].startTime;
+            if (dur > maxDur) maxDur = dur;
+          }
+          this._maxCueDuration = Math.min(Math.max(maxDur, 10), 120);
+
           this.applySettings();
+          this.invalidateCueWindow();
           this.updateSubtitles();
 
           if (saveToCache && videoIdToUse && isContextValid()) {
@@ -947,6 +956,7 @@
       this.currentFileName = "";
       this._settings.timeOffset = 0.0;
       this._customPos = null;
+      this.invalidateCueWindow();
       this.hideSubtitle();
       this.updateButtonState();
       this.applySettings();
@@ -1007,6 +1017,51 @@
       );
     }
 
+    _findCuesAndWindow(adjustedTime) {
+      const subs = this.subtitles;
+      const len = subs.length;
+      if (len === 0) {
+        this._windowStart = 1;
+        this._windowEnd = 0;
+        return [];
+      }
+
+      let low = 0, high = len;
+      while (low < high) {
+        const mid = (low + high) >> 1;
+        if (subs[mid].startTime > adjustedTime) {
+          high = mid;
+        } else {
+          low = mid + 1;
+        }
+      }
+
+      const nextFutureCue = low < len ? subs[low] : null;
+      let wEnd = nextFutureCue ? nextFutureCue.startTime : Infinity;
+      let wStart = -Infinity;
+
+      const active = [];
+      const minStartTime = adjustedTime - (this._maxCueDuration || 30);
+      for (let i = low - 1; i >= 0; i--) {
+        const cue = subs[i];
+        if (cue.startTime < minStartTime) break;
+
+        if (cue.endTime >= adjustedTime) {
+          active.push(cue);
+          if (cue.endTime < wEnd) wEnd = cue.endTime;
+          if (cue.startTime > wStart) wStart = cue.startTime;
+        } else {
+          if (cue.endTime > wStart) wStart = cue.endTime;
+        }
+      }
+
+      if (active.length > 1) active.reverse();
+
+      this._windowStart = wStart;
+      this._windowEnd = wEnd;
+      return active;
+    }
+
     updateSubtitles() {
       if (!this.subtitlesEnabled || !this.video || !this.subtitlesLoaded) {
         this.hideSubtitle();
@@ -1015,56 +1070,62 @@
 
       if (this.isAdPlaying()) {
         this.hideSubtitle();
+        this.invalidateCueWindow();
         return;
       }
 
       const currentTime = this.video.currentTime;
       const adjustedTime = currentTime + (this._settings.timeOffset || 0.0);
 
-      const activeCues = [];
-      for (let i = 0; i < this.subtitles.length; i++) {
-        const sub = this.subtitles[i];
-        if (adjustedTime >= sub.startTime && adjustedTime <= sub.endTime) {
-          activeCues.push(sub);
-        } else if (sub.startTime > adjustedTime && activeCues.length > 0) {
-          break;
-        }
+      if (adjustedTime >= this._windowStart && adjustedTime < this._windowEnd) {
+        return;
       }
 
+      const activeCues = this._findCuesAndWindow(adjustedTime);
+
       if (activeCues.length > 0) {
-        const uniqueTexts = [];
-        for (const cue of activeCues) {
-          const text = cue.text ? cue.text.trim() : "";
-          if (text && !uniqueTexts.includes(text)) {
-            uniqueTexts.push(text);
+        let combinedText = "";
+        let newKey = "";
+
+        if (activeCues.length === 1) {
+          const t = activeCues[0].text ? activeCues[0].text.trim() : "";
+          if (t) {
+            newKey = t;
+            combinedText = t;
+          }
+        } else {
+          const uniqueTexts = [];
+          for (let i = 0; i < activeCues.length; i++) {
+            const t = activeCues[i].text ? activeCues[i].text.trim() : "";
+            if (t && !uniqueTexts.includes(t)) {
+              uniqueTexts.push(t);
+            }
+          }
+          if (uniqueTexts.length > 0) {
+            newKey = uniqueTexts.join("///");
+            combinedText = uniqueTexts.join("<br>");
           }
         }
 
-        if (uniqueTexts.length > 0) {
-          const newKey = uniqueTexts.join("///");
+        if (newKey) {
           if (newKey !== this.currentSubtitleKey) {
             this.currentSubtitleKey = newKey;
-            const combinedText = uniqueTexts.join("<br>");
             this.showSubtitle(combinedText);
           }
-        } else {
-          if (this.currentSubtitleKey) {
-            this.hideSubtitle();
-            this.currentSubtitleKey = "";
-          }
-        }
-      } else {
-        if (this.currentSubtitleKey) {
+        } else if (this.currentSubtitleKey) {
           this.hideSubtitle();
           this.currentSubtitleKey = "";
         }
+      } else if (this.currentSubtitleKey) {
+        this.hideSubtitle();
+        this.currentSubtitleKey = "";
       }
     }
 
     showSubtitle(text) {
       if (!this.subtitleElement) return;
 
-      if (text.includes("<")) {
+      if (text.indexOf("<") !== -1) {
         this.subtitleElement.innerHTML = this.sanitizeHTML(text);
       } else {
         this.subtitleElement.textContent = text;
@@ -1073,34 +1134,41 @@
     }
 
     sanitizeHTML(text) {
-      const allowedTags = new Set(["i", "b", "u", "strong", "em", "br", "font", "span"]);
-      const allowedAttributes = new Set(["color", "size", "face"]);
-
-      const temp = document.createElement("div");
+      if (!this._sanitizeDiv) {
+        this._sanitizeDiv = document.createElement("div");
+        this._allowedTags = new Set(["i", "b", "u", "strong", "em", "br", "font", "span"]);
+        this._allowedAttrs = new Set(["color", "size", "face"]);
+      }
+      const temp = this._sanitizeDiv;
       temp.innerHTML = text;
 
       const scripts = temp.querySelectorAll("script, object, embed, iframe, link, meta, style");
-      scripts.forEach((script) => script.remove());
+      for (let i = 0; i < scripts.length; i++) scripts[i].remove();
 
       const allElements = temp.querySelectorAll("*");
-      allElements.forEach((element) => {
+      for (let i = 0; i < allElements.length; i++) {
+        const element = allElements[i];
         const tagName = element.tagName.toLowerCase();
-        if (!allowedTags.has(tagName)) {
+        if (!this._allowedTags.has(tagName)) {
           element.replaceWith(document.createTextNode(element.textContent));
         } else if (tagName === "font" || tagName === "span") {
-          const attrs = Array.from(element.attributes);
-          attrs.forEach((attr) => {
-            if (!allowedAttributes.has(attr.name.toLowerCase())) {
-              element.removeAttribute(attr.name);
+          const attrs = element.attributes;
+          for (let j = attrs.length - 1; j >= 0; j--) {
+            if (!this._allowedAttrs.has(attrs[j].name.toLowerCase())) {
+              element.removeAttribute(attrs[j].name);
             }
-          });
+          }
         } else {
-          const attrs = Array.from(element.attributes);
-          attrs.forEach((attr) => element.removeAttribute(attr.name));
+          const attrs = element.attributes;
+          for (let j = attrs.length - 1; j >= 0; j--) {
+            element.removeAttribute(attrs[j].name);
+          }
         }
-      });
+      }
 
-      return temp.innerHTML;
+      const clean = temp.innerHTML;
+      temp.textContent = "";
+      return clean;
     }
 
     hideSubtitle() {
@@ -1195,6 +1263,7 @@
 
     updateSettings(newSettings, notify = false) {
       this._settings = { ...this._settings, ...newSettings };
+      this.invalidateCueWindow();
       this.applySettings();
       this.updateButtonState();
 
@@ -1219,6 +1288,7 @@
     adjustTimeOffset(delta) {
       const newOffset = Math.round(((this._settings.timeOffset || 0) + delta) * 10) / 10;
       this._settings.timeOffset = newOffset;
+      this.invalidateCueWindow();
       this.applySettings();
       this.updateButtonState();
       this.updateSubtitles();
@@ -1235,6 +1305,7 @@
 
     resetTimeOffset() {
       this._settings.timeOffset = 0.0;
+      this.invalidateCueWindow();
       this.applySettings();
       this.updateButtonState();
       this.updateSubtitles();

@@ -24,46 +24,34 @@
         return [];
       }
 
-      // Strip UTF-8 BOM and normalize all line breaks to \n
-      let clean = content
-        .replace(/^\uFEFF/, "")
-        .replace(/\r\n/g, "\n")
-        .replace(/\r/g, "\n");
-
-      const isVTT = clean.trim().startsWith("WEBVTT");
-
-      // Clean WebVTT header and non-cue blocks
-      if (isVTT) {
-        clean = clean.replace(/^WEBVTT[^\n]*\n+/i, "");
-        // Remove NOTE blocks (NOTE comment... until empty line)
-        clean = clean.replace(/NOTE(\s+[^\n]*)?(\n[^\n]+)*\n*/gi, "");
-        // Remove STYLE blocks
-        clean = clean.replace(/STYLE(\s+[^\n]*)?(\n[^\n]+)*\n*/gi, "");
-        // Remove REGION blocks
-        clean = clean.replace(/REGION(\s+[^\n]*)?(\n[^\n]+)*\n*/gi, "");
-      }
+      // Strip UTF-8 BOM and normalize CRLF/CR to LF in one pass
+      const clean = content.charCodeAt(0) === 0xFEFF
+        ? content.slice(1).replace(/\r\n?/g, "\n")
+        : content.replace(/\r\n?/g, "\n");
 
       const subtitles = [];
-      // Split into cue blocks separated by two or more newlines
       const rawBlocks = clean.trim().split(/\n\s*\n+/);
       let autoIndex = 1;
 
-      // Regex matches SRT / VTT timestamps:
-      // Format: [HH:]MM:SS[,.]mmm --> [HH:]MM:SS[,.]mmm [optional cue settings]
       const timeRegex = /^(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{1,3})(?:[^\n]*)$/;
+      const tagRegex = /<\/?[vc](?:[\s.][^>]*)?>|\{\\[^}]*\}/gi;
 
       for (let i = 0; i < rawBlocks.length; i++) {
-        let block = rawBlocks[i].trim();
+        const block = rawBlocks[i].trim();
         if (!block) continue;
 
-        const lines = block.split("\n").map((l) => l.trimEnd());
-        if (lines.length === 0) continue;
+        // Skip WebVTT header and non-cue blocks
+        if (/^(?:WEBVTT|NOTE|STYLE|REGION)\b/i.test(block)) continue;
+
+        const lines = block.split("\n");
+        const numLines = lines.length;
+        if (numLines === 0) continue;
 
         let timeLineIdx = -1;
         let timeMatch = null;
 
-        // The timestamp line is usually line 0 (VTT) or line 1 (SRT), check up to first 4 lines
-        for (let j = 0; j < Math.min(lines.length, 4); j++) {
+        const checkLimit = numLines < 4 ? numLines : 4;
+        for (let j = 0; j < checkLimit; j++) {
           const m = lines[j].trim().match(timeRegex);
           if (m) {
             timeLineIdx = j;
@@ -74,7 +62,6 @@
 
         if (timeLineIdx === -1 || !timeMatch) continue;
 
-        // Determine index number
         let index = autoIndex++;
         if (timeLineIdx > 0) {
           const parsedIdx = parseInt(lines[0].trim(), 10);
@@ -98,18 +85,12 @@
 
         if (isNaN(startTime) || isNaN(endTime) || startTime > endTime) continue;
 
-        // Extract raw subtitle text
-        let textLines = lines.slice(timeLineIdx + 1);
-        let text = textLines.join("\n").trim();
+        let text = lines.slice(timeLineIdx + 1).join("\n").trim();
         if (!text) continue;
 
-        // Clean VTT voice tags like <v Speaker> or </v>, class tags <c.yellow>, ASS {\...}
-        text = text
-          .replace(/<v(?:\s+[^>]*)?>/gi, "")
-          .replace(/<\/v>/gi, "")
-          .replace(/<c(?:\.[^>]*)?>/gi, "")
-          .replace(/<\/c>/gi, "")
-          .replace(/\{\\[^}]*\}/g, "");
+        if (text.indexOf("<") !== -1 || text.indexOf("{\\") !== -1) {
+          text = text.replace(tagRegex, "");
+        }
 
         subtitles.push({
           index,
@@ -119,9 +100,7 @@
         });
       }
 
-      // Sort cues chronologically
       subtitles.sort((a, b) => a.startTime - b.startTime);
-
       return subtitles;
     }
 
@@ -130,11 +109,16 @@
      * @private
      */
     static _parseTimeToSeconds(hours, minutes, seconds, milliseconds) {
-      const h = hours ? parseInt(hours, 10) : 0;
-      const m = parseInt(minutes, 10);
-      const s = parseInt(seconds, 10);
-      const msStr = (milliseconds || "0").padEnd(3, "0").slice(0, 3);
-      const ms = parseInt(msStr, 10);
+      const h = hours ? +hours : 0;
+      const m = +minutes;
+      const s = +seconds;
+      let ms = +milliseconds || 0;
+      if (milliseconds) {
+        const len = milliseconds.length;
+        if (len === 1) ms *= 100;
+        else if (len === 2) ms *= 10;
+        else if (len > 3) ms = +(milliseconds.slice(0, 3));
+      }
 
       if (isNaN(h) || isNaN(m) || isNaN(s) || isNaN(ms)) {
         return NaN;

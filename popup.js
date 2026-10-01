@@ -213,8 +213,19 @@ class PopupController {
       });
     });
 
-    // Cue Search
-    this.cueSearchInput.addEventListener("input", () => this.filterCues());
+    // Cue Search with debounce
+    this.cueSearchInput.addEventListener("input", () => {
+      clearTimeout(this._searchTimeout);
+      this._searchTimeout = setTimeout(() => this.filterCues(), 150);
+    });
+
+    // Delegated click for cue list jump
+    this.cuesList.addEventListener("click", (e) => {
+      const item = e.target.closest(".cue-item");
+      if (item && item.dataset.time) {
+        this.jumpToTimestamp(parseFloat(item.dataset.time));
+      }
+    });
 
     // Auto-update popup when YouTube link / tab changes or content script broadcasts status
     if (typeof chrome !== "undefined" && chrome.tabs?.onUpdated) {
@@ -228,7 +239,20 @@ class PopupController {
     if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
       chrome.runtime.onMessage.addListener((message) => {
         if (message.action === "sublyStatusChanged") {
-          this.checkCurrentTabStatus();
+          if (message.timeOffset !== undefined) {
+            this.settings.timeOffset = message.timeOffset;
+            this.updateSyncDisplay(message.timeOffset);
+          }
+          if (message.subtitlesEnabled !== undefined) {
+            this.updatePowerButtonUI(message.subtitlesEnabled);
+          }
+          if (message.subtitlesLoaded) {
+            this.updateLoadedCard(message.fileName, message.subtitlesCount, message.timeOffset);
+          }
+          if (message.videoId !== this._currentVideoId || message.subtitlesLoaded !== this.loadedCard.classList.contains("visible")) {
+            this._currentVideoId = message.videoId;
+            this.checkCurrentTabStatus();
+          }
         }
       });
     }
@@ -362,6 +386,7 @@ class PopupController {
       this.selectedFile = null;
       this.srtContent = null;
       this.loadedSubtitles = [];
+      this._lastRenderedFile = "";
       this.settings.timeOffset = 0.0;
       this.updateSyncDisplay(0.0);
       this.dropPrimary.textContent = "Click or drag subtitle file here";
@@ -494,37 +519,22 @@ class PopupController {
   /* ================= TAB 4: SEARCH CUES & JUMP ================= */
   populateCuesList(cuesToRender = null) {
     const list = cuesToRender || this.loadedSubtitles;
-    this.cuesList.innerHTML = "";
 
     if (!list || list.length === 0) {
-      const emptyDiv = document.createElement("div");
-      emptyDiv.className = "no-cues";
-      emptyDiv.textContent = this.loadedSubtitles.length > 0 ? "No matching dialogue found!" : "No subtitles loaded yet. Please load a subtitle file in Files tab!";
-      this.cuesList.appendChild(emptyDiv);
+      this.cuesList.innerHTML = `<div class="no-cues">${this.loadedSubtitles.length > 0 ? "No matching dialogue found!" : "No subtitles loaded yet. Please load a subtitle file in Files tab!"}</div>`;
       return;
     }
 
-    const fragment = document.createDocumentFragment();
     const parser = window.SRTParser || (typeof SRTParser !== "undefined" ? SRTParser : null);
-
-    const displayList = list.slice(0, 250);
-    displayList.forEach((sub) => {
-      const item = document.createElement("div");
-      item.className = "cue-item";
+    const limit = Math.min(list.length, 250);
+    let html = "";
+    for (let i = 0; i < limit; i++) {
+      const sub = list[i];
       const timeStr = parser ? parser.formatTime(sub.startTime) : `${sub.startTime}s`;
-      item.innerHTML = `
-        <div class="cue-header">
-          <span class="cue-time">▶ ${timeStr}</span>
-          <span class="cue-idx">#${sub.index}</span>
-        </div>
-        <div class="cue-text">${this.cleanText(sub.text)}</div>
-      `;
+      html += `<div class="cue-item" data-time="${sub.startTime}"><div class="cue-header"><span class="cue-time">▶ ${timeStr}</span><span class="cue-idx">#${sub.index}</span></div><div class="cue-text">${this.cleanText(sub.text)}</div></div>`;
+    }
 
-      item.addEventListener("click", () => this.jumpToTimestamp(sub.startTime));
-      fragment.appendChild(item);
-    });
-
-    this.cuesList.appendChild(fragment);
+    this.cuesList.innerHTML = html;
   }
 
   cleanText(text) {
@@ -611,14 +621,22 @@ class PopupController {
         this.updateSyncDisplay(this.settings.timeOffset);
 
         if (res.subtitlesLoaded) {
-          this.loadedSubtitles = res.subtitles || [];
-          this.updateLoadedCard(res.fileName, res.subtitlesCount, this.settings.timeOffset);
-          this.populateCuesList();
+          const count = res.subtitlesCount || (res.subtitles ? res.subtitles.length : 0);
+          const needsCuesUpdate = this.loadedSubtitles.length !== count || this._lastRenderedFile !== res.fileName;
+          if (needsCuesUpdate) {
+            this.loadedSubtitles = res.subtitles || [];
+            this._lastRenderedFile = res.fileName;
+            this.populateCuesList();
+          }
+          this.updateLoadedCard(res.fileName, count, this.settings.timeOffset);
           this.presetNotice.classList.remove("visible");
         } else {
           this.loadedCard.classList.remove("visible");
-          this.loadedSubtitles = [];
-          this.populateCuesList();
+          if (this.loadedSubtitles.length > 0) {
+            this.loadedSubtitles = [];
+            this._lastRenderedFile = "";
+            this.populateCuesList();
+          }
           this.checkPresetMapping(tab.url);
         }
       } else {
