@@ -244,16 +244,7 @@
         #custom-subtitles b, #custom-subtitles strong { font-weight: bold; }
         #custom-subtitles u { text-decoration: underline; }
         #custom-subtitles br { line-height: 1.25; }
-        #subly-toggle-button .subly-active-dot {
-          position: absolute;
-          top: 10px;
-          right: 10px;
-          width: 6px;
-          height: 6px;
-          border-radius: 50%;
-          background: #ff4757;
-          box-shadow: 0 0 6px #ff4757;
-        }
+
         #movie_player:has(#custom-subtitles:not([style*="display: none"])) .ytp-caption-window-bottom,
         #movie_player:has(#custom-subtitles:not([style*="display: none"])) .caption-window,
         #movie_player:has(#custom-subtitles:not([style*="display: none"])) .ytp-caption-segment {
@@ -355,12 +346,8 @@
         }
       }
 
-      if (!this.toggleButton || !this.toggleButton.isConnected) {
-        const rightControls = document.querySelector(".ytp-right-controls");
-        if (rightControls) {
-          this.injectToggleButton(rightControls);
-        }
-      }
+      const oldBtn = document.getElementById("subly-toggle-button");
+      if (oldBtn) oldBtn.remove();
     }
 
     handleVideoChange(newVideoId) {
@@ -646,58 +633,6 @@
       }, duration);
     }
 
-    injectToggleButton(rightControls) {
-      const oldBtns = document.querySelectorAll("#subly-toggle-button");
-      oldBtns.forEach((el) => {
-        try { el.remove(); } catch (_) {}
-      });
-
-      this.toggleButton = document.createElement("button");
-      this.toggleButton.id = "subly-toggle-button";
-      this.toggleButton.className = "ytp-button";
-      this.toggleButton.setAttribute("data-priority", "4");
-      this.toggleButton.setAttribute("aria-label", "Subly Subtitles");
-      this.toggleButton.setAttribute("title", "Subly Subtitles (Alt+T)");
-      this.toggleButton.style.cssText = `
-        position: relative;
-        width: 48px;
-        height: 48px;
-        border: none;
-        background: transparent;
-        cursor: default;
-        opacity: 0.4;
-        transition: opacity 0.2s ease;
-      `;
-
-      this.toggleButton.innerHTML = `
-        <svg height="100%" version="1.1" viewBox="0 0 36 36" width="100%">
-          <path d="M8,8 C6.89,8 6,8.9 6,10 L6,26 C6,27.1 6.89,28 8,28 L28,28 C29.1,28 30,27.1 30,26 L30,10 C30,8.9 29.1,8 28,8 L8,8 Z M10,12 L26,12 L26,14 L10,14 L10,12 z M10,16 L20,16 L20,18 L10,18 L10,16 z M10,20 L24,20 L24,22 L10,22 L10,20 z M26,18 L28,18 L28,20 L26,20 L26,18 z" fill="#888" stroke="none"/>
-        </svg>
-        <div class="subly-active-dot" style="display: none;"></div>
-      `;
-
-      this._buttonPath = this.toggleButton.querySelector("path");
-      this._buttonLine = null;
-
-      this.toggleButton.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        this.toggleSubtitles();
-      });
-
-      try {
-        const subtitlesButton = rightControls.querySelector(".ytp-subtitles-button");
-        if (subtitlesButton && rightControls.contains(subtitlesButton)) {
-          rightControls.insertBefore(this.toggleButton, subtitlesButton);
-        } else {
-          rightControls.appendChild(this.toggleButton);
-        }
-      } catch (_) {
-        rightControls.appendChild(this.toggleButton);
-      }
-
-      this.updateButtonState();
-    }
 
     toggleSubtitles() {
       if (!this.subtitlesLoaded) {
@@ -727,63 +662,7 @@
       this.broadcastStatus();
     }
 
-    updateButtonState() {
-      if (!this.toggleButton) return;
-
-      const isActive = this.subtitlesLoaded && this.subtitlesEnabled;
-      const isLoaded = this.subtitlesLoaded;
-      const dot = this.toggleButton.querySelector(".subly-active-dot");
-
-      this.toggleButton.style.opacity = isLoaded ? (isActive ? "1" : "0.7") : "0.35";
-      this.toggleButton.style.cursor = isLoaded ? "pointer" : "default";
-
-      if (dot) {
-        dot.style.display = isActive ? "block" : "none";
-      }
-
-      let offsetStr = "";
-      if (this._settings.timeOffset) {
-        const sign = this._settings.timeOffset > 0 ? "+" : "";
-        offsetStr = ` • Sync: ${sign}${this._settings.timeOffset.toFixed(1)}s`;
-      }
-
-      let label, title;
-      if (!isLoaded) {
-        label = title = "Subly: No subtitles loaded (Drop .srt file onto video)";
-      } else if (isActive) {
-        label = title = `Subly: Disable subtitles (Alt+T) [${this.subtitles.length} cues${offsetStr}]`;
-      } else {
-        label = title = `Subly: Enable subtitles (Alt+T) [${this.subtitles.length} cues${offsetStr}]`;
-      }
-
-      this.toggleButton.setAttribute("aria-label", label);
-      this.toggleButton.setAttribute("title", title);
-
-      if (this._buttonPath) {
-        this._buttonPath.setAttribute("fill", isActive ? "#ff4757" : isLoaded ? "#ffffff" : "#888");
-      }
-
-      if (isLoaded && !this.subtitlesEnabled) {
-        if (!this._buttonLine) {
-          const svg = this.toggleButton.querySelector("svg");
-          const newLine = document.createElementNS("http://www.w3.org/2000/svg", "line");
-          newLine.setAttribute("x1", "6");
-          newLine.setAttribute("y1", "6");
-          newLine.setAttribute("x2", "30");
-          newLine.setAttribute("y2", "30");
-          newLine.setAttribute("stroke", "#ff4444");
-          newLine.setAttribute("stroke-width", "2.5");
-          newLine.setAttribute("opacity", "0.9");
-          svg.appendChild(newLine);
-          this._buttonLine = newLine;
-        }
-      } else {
-        if (this._buttonLine) {
-          this._buttonLine.remove();
-          this._buttonLine = null;
-        }
-      }
-    }
+    updateButtonState() {}
 
     listenForMessages() {
       if (!isContextValid()) return;
