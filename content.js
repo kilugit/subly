@@ -20,7 +20,6 @@
  * - Pure CSS autohide transitions
  * - Ad suppression (hides custom subtitles during ads)
  * - Fullscreen responsive typography
- * - Cache LRU pruning to prevent storage bloat
  */
 
 (function () {
@@ -793,7 +792,6 @@
 
           if (saveToCache && videoIdToUse && isContextValid()) {
             this.saveCurrentCache(videoIdToUse);
-            this.pruneOldCache();
           }
         }
 
@@ -871,22 +869,7 @@
       } catch (_) {}
     }
 
-    async pruneOldCache() {
-      if (!isContextValid()) return;
-      try {
-        const all = await chrome.storage.local.get(null);
-        const sublyKeys = Object.keys(all).filter((k) => k.startsWith("subly_cache_"));
-        if (sublyKeys.length > 60) {
-          const items = sublyKeys.map((k) => ({
-            key: k,
-            savedAt: all[k]?.savedAt || 0,
-          }));
-          items.sort((a, b) => a.savedAt - b.savedAt);
-          const keysToRemove = items.slice(0, items.length - 50).map((i) => i.key);
-          await chrome.storage.local.remove(keysToRemove);
-        }
-      } catch (_) {}
-    }
+
 
     isAdPlaying() {
       if (!this.playerContainer) return false;
