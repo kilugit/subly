@@ -105,3 +105,7 @@ Whether you are studying foreign languages, watching films or anime without offi
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🤝 Contributing
+
+We welcome contributions from the community! Whether it's bug fixes, feature additions, or documentation improvements, your help makes Subly better for everyone.
