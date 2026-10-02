@@ -51,6 +51,7 @@ class PopupController {
     this.loadedCuesCount = document.getElementById("loadedCuesCount");
     this.loadedOffset = document.getElementById("loadedOffset");
     this.unloadBtn = document.getElementById("unloadBtn");
+    this.clearCacheBtn = document.getElementById("clearCacheBtn");
     this.dropArea = document.getElementById("dropArea");
     this.fileInput = document.getElementById("fileInput");
     this.dropPrimary = document.getElementById("dropPrimary");
@@ -135,6 +136,7 @@ class PopupController {
 
     this.loadBtn.addEventListener("click", () => this.loadSubtitles());
     this.unloadBtn.addEventListener("click", () => this.unloadSubtitles());
+    this.clearCacheBtn.addEventListener("click", () => this.clearCachedSubtitles());
 
     this.syncBtns.forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -394,6 +396,22 @@ class PopupController {
         this.checkPresetMapping(tab.url);
       }
     } catch (_) {}
+  }
+
+  async clearCachedSubtitles() {
+    if (!confirm("Are you sure you want to clear cached subtitles?")) {
+      return;
+    }
+    try {
+      const items = await chrome.storage.local.get(null);
+      const keys = Object.keys(items || {}).filter((k) => k.startsWith("subly_cache_"));
+      if (keys.length > 0) {
+        await chrome.storage.local.remove(keys);
+      }
+      this.showStatus("Cached subtitles cleared!", "success");
+    } catch (_) {
+      this.showStatus("Failed to clear cached subtitles", "error");
+    }
   }
 
   readFile(file) {
