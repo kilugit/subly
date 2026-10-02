@@ -1,14 +1,4 @@
-/**
- * Subly Subtitle Parser
- * Supports SubRip (.srt), WebVTT (.vtt), and timestamped text files.
- * Handles Windows/Unix line endings, UTF-8 BOM, decimal commas/periods,
- * optional hours, cue tags, and overlapping timestamps.
- * 
- * Safe against duplicate execution via var + singleton guard.
- */
-
 (function () {
-  // If already declared on global window, reuse it
   if (typeof window !== "undefined" && window.SRTParser) {
     return;
   }
@@ -24,83 +14,78 @@
         return [];
       }
 
-      // Strip UTF-8 BOM and normalize CRLF/CR to LF in one pass
-      const clean = content.charCodeAt(0) === 0xFEFF
-        ? content.slice(1).replace(/\r\n?/g, "\n")
-        : content.replace(/\r\n?/g, "\n");
-
+      const clean = content.charCodeAt(0) === 0xFEFF ? content.slice(1) : content;
+      const lines = clean.split(/\r?\n/);
+      const totalLines = lines.length;
       const subtitles = [];
-      const rawBlocks = clean.trim().split(/\n\s*\n+/);
-      let autoIndex = 1;
-
-      const timeRegex = /^(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{1,3})(?:[^\n]*)$/;
+      const timeRegex = /^(?:(\d{1,4}):)?(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(?:(\d{1,4}):)?(\d{2}):(\d{2})[,.](\d{1,3})/;
       const tagRegex = /<\/?[vc](?:[\s.][^>]*)?>|\{\\[^}]*\}/gi;
 
-      for (let i = 0; i < rawBlocks.length; i++) {
-        const block = rawBlocks[i].trim();
-        if (!block) continue;
+      let autoIndex = 1;
+      let isSorted = true;
+      let lastStartTime = 0;
+      let i = 0;
 
-        // Skip WebVTT header and non-cue blocks
-        if (/^(?:WEBVTT|NOTE|STYLE|REGION)\b/i.test(block)) continue;
+      while (i < totalLines) {
+        let line = lines[i].trim();
+        if (!line || /^(?:WEBVTT|NOTE|STYLE|REGION)\b/i.test(line)) {
+          i++;
+          continue;
+        }
 
-        const lines = block.split("\n");
-        const numLines = lines.length;
-        if (numLines === 0) continue;
-
-        let timeLineIdx = -1;
         let timeMatch = null;
+        let cueIndex = autoIndex;
 
-        const checkLimit = numLines < 4 ? numLines : 4;
-        for (let j = 0; j < checkLimit; j++) {
-          const m = lines[j].trim().match(timeRegex);
-          if (m) {
-            timeLineIdx = j;
-            timeMatch = m;
-            break;
-          }
+        if (line.includes("-->")) {
+          timeMatch = line.match(timeRegex);
+        } else if (i + 1 < totalLines && lines[i + 1].includes("-->")) {
+          const parsed = parseInt(line, 10);
+          if (!isNaN(parsed)) cueIndex = parsed;
+          i++;
+          line = lines[i].trim();
+          timeMatch = line.match(timeRegex);
         }
 
-        if (timeLineIdx === -1 || !timeMatch) continue;
-
-        let index = autoIndex++;
-        if (timeLineIdx > 0) {
-          const parsedIdx = parseInt(lines[0].trim(), 10);
-          if (!isNaN(parsedIdx)) {
-            index = parsedIdx;
-          }
+        if (!timeMatch) {
+          i++;
+          continue;
         }
 
-        const startTime = this._parseTimeToSeconds(
-          timeMatch[1],
-          timeMatch[2],
-          timeMatch[3],
-          timeMatch[4]
-        );
-        const endTime = this._parseTimeToSeconds(
-          timeMatch[5],
-          timeMatch[6],
-          timeMatch[7],
-          timeMatch[8]
-        );
+        autoIndex++;
+        const startTime = this._parseTimeToSeconds(timeMatch[1], timeMatch[2], timeMatch[3], timeMatch[4]);
+        const endTime = this._parseTimeToSeconds(timeMatch[5], timeMatch[6], timeMatch[7], timeMatch[8]);
 
-        if (isNaN(startTime) || isNaN(endTime) || startTime > endTime) continue;
+        i++;
+        let text = "";
+        while (i < totalLines) {
+          const textLine = lines[i];
+          if (!textLine.trim()) break;
+          text = text ? text + "\n" + textLine : textLine;
+          i++;
+        }
 
-        let text = lines.slice(timeLineIdx + 1).join("\n").trim();
-        if (!text) continue;
+        if (isNaN(startTime) || isNaN(endTime) || startTime > endTime || !text) {
+          continue;
+        }
 
         if (text.indexOf("<") !== -1 || text.indexOf("{\\") !== -1) {
           text = text.replace(tagRegex, "");
         }
 
+        if (startTime < lastStartTime) isSorted = false;
+        lastStartTime = startTime;
+
         subtitles.push({
-          index,
+          index: cueIndex,
           startTime,
           endTime,
-          text,
+          text: text.trim(),
         });
       }
 
-      subtitles.sort((a, b) => a.startTime - b.startTime);
+      if (!isSorted) {
+        subtitles.sort((a, b) => a.startTime - b.startTime);
+      }
       return subtitles;
     }
 
@@ -153,7 +138,6 @@
     }
   }
 
-  // Global aliases for both popup and content script contexts
   if (typeof window !== "undefined") {
     window.SRTParser = SRTParser;
     window.SubtitleParser = SRTParser;

@@ -1,34 +1,8 @@
-/**
- * Subly - YouTube Subtitle Injector (Content Script)
- * Version 2.0.4 - Resilient YouTube Link Sync & Auto-Restore
- * 
- * Features:
- * - Robust protection against "Extension context invalidated"
- * - Auto-termination of zombie instances when extension is reloaded
- * - Accurate YouTube link & video ID extraction (watch, shorts, embed, live)
- * - Single-Page-App (SPA) navigation awareness (yt-navigate-finish, yt-page-data-updated, popstate)
- * - Strict race condition prevention during async restores via navigation sequence guards
- * - Clean state transitions (immediately clears old subtitles when navigating between videos)
- * - Per-video cache persistence (saves subtitle content, file name, and fine-tuned sync offsets)
- * - Restores exact user-adjusted timing offsets and respects explicit unload actions
- * - Safe Chrome Storage and Runtime API calls with listener cleanup
- * - Real-time subtitle rendering for SRT & WebVTT with HTML formatting
- * - Real-time time synchronization adjustment (Alt+[, Alt+], Alt+\)
- * - Drag-and-drop subtitle files (.srt, .vtt) directly onto YouTube player
- * - Sleek on-screen HUD toast notifications
- * - Pause, seek, and variable playback speed auto-synchronization
- * - Pure CSS autohide transitions
- * - Ad suppression (hides custom subtitles during ads)
- * - Fullscreen responsive typography
- */
-
 (function () {
-  // 1. Strict Iframe Protection: Only run in the top-level YouTube page
   if (typeof window === "undefined" || window.top !== window) {
     return;
   }
 
-  // 2. Helper to verify if the extension context is still alive
   function isContextValid() {
     try {
       return Boolean(typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.id);
@@ -37,7 +11,6 @@
     }
   }
 
-  // Helper to extract YouTube video ID from URL or pathname
   function extractVideoId(urlString) {
     try {
       let search = "";
@@ -56,13 +29,11 @@
         pathname = window.location.pathname;
       }
 
-      // 1. Check ?v= query parameter
       const vMatch = search.match(/[?&]v=([a-zA-Z0-9_-]+)/);
       if (vMatch && vMatch[1]) {
         return vMatch[1];
       }
 
-      // 2. Check path-based formats: /shorts/ID, /embed/ID, /live/ID, /v/ID
       const pathMatch = pathname.match(/\/(?:shorts|embed|live|v)\/([a-zA-Z0-9_-]+)/);
       if (pathMatch && pathMatch[1]) {
         return pathMatch[1];
@@ -71,7 +42,7 @@
     return "";
   }
 
-  // 3. Singleton cleanup of any prior instance in this page
+  // Clean up any prior instance when script is re-injected
   if (window.__subly_instance) {
     try {
       window.__subly_instance.cleanup();
@@ -99,8 +70,16 @@
 
       this._windowStart = 1;
       this._windowEnd = 0;
+      this._lastCueIdx = -1;
       this._maxCueDuration = 30;
       this._updateSubtitlesBound = null;
+      this._videoFrameId = null;
+      this._onVideoFrame = null;
+      this._onPlay = null;
+      this._onPause = null;
+      this._isSubtitleVisible = false;
+      this._wasAdPlaying = false;
+      this._saveCacheTimeout = null;
       this._keydownHandler = null;
       this._messageListener = null;
       this._storageListener = null;
@@ -227,6 +206,11 @@
           -webkit-user-select: none;
           cursor: grab;
           will-change: transform;
+          white-space: pre-line;
+          padding: 0.25em 0.65em;
+          border-radius: 6px;
+          box-sizing: border-box;
+          line-height: 1.4;
         }
         #custom-subtitles.subly-pos-bottom {
           bottom: var(--subly-bottom, 72px) !important;
@@ -260,6 +244,7 @@
     invalidateCueWindow() {
       this._windowStart = 1;
       this._windowEnd = 0;
+      this._lastCueIdx = -1;
     }
 
     loadSyncSettings() {
@@ -332,7 +317,9 @@
       }
 
       if (this.playerContainer) {
-        this.playerContainer.style.position = "relative";
+        if (this.playerContainer.style.position !== "relative") {
+          this.playerContainer.style.position = "relative";
+        }
 
         if (!this.subtitleElement || !this.subtitleElement.isConnected) {
           this.setupSubtitleDisplay();
@@ -344,25 +331,19 @@
           this.setupHudToast();
         }
       }
-
-      const oldBtn = document.getElementById("subly-toggle-button");
-      if (oldBtn) oldBtn.remove();
     }
 
     handleVideoChange(newVideoId) {
       if (newVideoId === this.lastVideoId) return;
 
-      // 1. Ensure latest adjustments for previous video were saved before switching
       if (this.lastVideoId && this.subtitlesLoaded && this.rawSrtContent) {
         this.saveCurrentCache(this.lastVideoId);
       }
 
-      // 2. Increment navigation sequence to cancel any in-flight async operations
       this._navigationSeq++;
       const seq = this._navigationSeq;
       this.lastVideoId = newVideoId;
 
-      // 3. Immediately clear all subtitles from previous video so nothing incorrect displays
       this.subtitles = [];
       this.rawSrtContent = "";
       this.subtitlesLoaded = false;
@@ -375,10 +356,8 @@
       this.updateButtonState();
       this.applySettings();
 
-      // Notify any open popup that subtitles are cleared for the new video link
       this.broadcastStatus();
 
-      // 4. If newVideoId is valid, restore subtitles for this video
       if (newVideoId) {
         clearTimeout(this._navDebounceTimeout);
         this._navDebounceTimeout = setTimeout(() => {
@@ -398,21 +377,55 @@
         this._updateSubtitlesBound = () => this.updateSubtitles();
       }
 
+      this._onVideoFrame = () => {
+        if (!this.video || this.video.paused) {
+          this._videoFrameId = null;
+          return;
+        }
+        this.updateSubtitles();
+        this._videoFrameId = this.video.requestVideoFrameCallback(this._onVideoFrame);
+      };
+
+      this._onPlay = () => {
+        this.updateSubtitles();
+        if (this.video?.requestVideoFrameCallback && !this._videoFrameId) {
+          this._videoFrameId = this.video.requestVideoFrameCallback(this._onVideoFrame);
+        }
+      };
+
+      this._onPause = () => {
+        if (this._videoFrameId && this.video?.cancelVideoFrameCallback) {
+          this.video.cancelVideoFrameCallback(this._videoFrameId);
+          this._videoFrameId = null;
+        }
+        this.updateSubtitles();
+      };
+
       this.video.addEventListener("timeupdate", this._updateSubtitlesBound);
       this.video.addEventListener("seeked", this._updateSubtitlesBound);
-      this.video.addEventListener("pause", this._updateSubtitlesBound);
-      this.video.addEventListener("play", this._updateSubtitlesBound);
+      this.video.addEventListener("pause", this._onPause);
+      this.video.addEventListener("play", this._onPlay);
       this.video.addEventListener("ratechange", this._updateSubtitlesBound);
+
+      if (!this.video.paused && this.video.requestVideoFrameCallback && !this._videoFrameId) {
+        this._videoFrameId = this.video.requestVideoFrameCallback(this._onVideoFrame);
+      }
     }
 
     _cleanupVideoListeners() {
-      if (this.video && this._updateSubtitlesBound) {
-        this.video.removeEventListener("timeupdate", this._updateSubtitlesBound);
-        this.video.removeEventListener("seeked", this._updateSubtitlesBound);
-        this.video.removeEventListener("pause", this._updateSubtitlesBound);
-        this.video.removeEventListener("play", this._updateSubtitlesBound);
-        this.video.removeEventListener("ratechange", this._updateSubtitlesBound);
+      if (this.video) {
+        if (this._videoFrameId && this.video.cancelVideoFrameCallback) {
+          this.video.cancelVideoFrameCallback(this._videoFrameId);
+        }
+        if (this._updateSubtitlesBound) {
+          this.video.removeEventListener("timeupdate", this._updateSubtitlesBound);
+          this.video.removeEventListener("seeked", this._updateSubtitlesBound);
+          this.video.removeEventListener("ratechange", this._updateSubtitlesBound);
+        }
+        if (this._onPause) this.video.removeEventListener("pause", this._onPause);
+        if (this._onPlay) this.video.removeEventListener("play", this._onPlay);
       }
+      this._videoFrameId = null;
     }
 
     setupSubtitleDisplay() {
@@ -424,12 +437,24 @@
       this.subtitleElement = document.createElement("div");
       this.subtitleElement.id = "custom-subtitles";
       this.subtitleElement.className = "subly-custom-subtitle";
+      this._isSubtitleVisible = false;
+      this.subtitleElement.style.display = "none";
+      this.subtitleElement.style.position = "absolute";
+      this.subtitleElement.style.textAlign = "center";
+      this.subtitleElement.style.zIndex = "99997";
+      this.subtitleElement.style.maxWidth = "85%";
+      this.subtitleElement.style.lineHeight = "1.4";
+      this.subtitleElement.style.wordWrap = "break-word";
+      this.subtitleElement.style.overflowWrap = "break-word";
+      this.subtitleElement.style.cursor = "grab";
 
       this.setupDraggableSubtitles();
       this.applySettings();
 
       if (this.playerContainer) {
-        this.playerContainer.style.position = "relative";
+        if (this.playerContainer.style.position !== "relative") {
+          this.playerContainer.style.position = "relative";
+        }
         this.playerContainer.appendChild(this.subtitleElement);
       }
     }
@@ -696,7 +721,7 @@
             this.seekToTime(message.seconds);
             sendResponse({ success: true });
           } else if (message.action === "getStatus") {
-            sendResponse({
+            const res = {
               success: true,
               videoId: this.getCurrentVideoId(),
               subtitlesLoaded: this.subtitlesLoaded,
@@ -706,8 +731,13 @@
               timeOffset: this._settings.timeOffset || 0,
               currentTime: this.video ? this.video.currentTime : 0,
               settings: this._settings,
-              subtitles: this.subtitles.slice(0, 1000),
-            });
+            };
+            if (message.includeCues) {
+              res.subtitles = this.subtitles;
+            }
+            sendResponse(res);
+          } else if (message.action === "getCues") {
+            sendResponse({ success: true, subtitles: this.subtitles });
           }
         } catch (error) {
           sendResponse({ success: false, error: error.message });
@@ -791,7 +821,7 @@
           this.updateSubtitles();
 
           if (saveToCache && videoIdToUse && isContextValid()) {
-            this.saveCurrentCache(videoIdToUse);
+            this.saveCurrentCache(videoIdToUse, true);
           }
         }
 
@@ -805,7 +835,16 @@
       }
     }
 
-    saveCurrentCache(targetVideoId = null) {
+    saveCurrentCache(targetVideoId = null, immediate = false) {
+      if (!immediate) {
+        clearTimeout(this._saveCacheTimeout);
+        this._saveCacheTimeout = setTimeout(() => {
+          this.saveCurrentCache(targetVideoId, true);
+        }, 400);
+        return;
+      }
+      clearTimeout(this._saveCacheTimeout);
+
       const videoId = targetVideoId || this.getCurrentVideoId() || this.lastVideoId;
       if (!videoId || !this.subtitlesLoaded || !this.rawSrtContent || !isContextValid()) {
         return;
@@ -888,15 +927,29 @@
         return [];
       }
 
-      let low = 0, high = len;
-      while (low < high) {
-        const mid = (low + high) >> 1;
-        if (subs[mid].startTime > adjustedTime) {
-          high = mid;
+      let low = -1;
+      const last = this._lastCueIdx;
+      if (last !== undefined && last >= 0 && last < len) {
+        if (subs[last].startTime > adjustedTime) {
+          if (last === 0 || subs[last - 1].startTime <= adjustedTime) low = last;
+        } else if (last + 1 < len) {
+          if (subs[last + 1].startTime > adjustedTime) low = last + 1;
+          else if (last + 2 < len && subs[last + 2].startTime > adjustedTime) low = last + 2;
         } else {
-          low = mid + 1;
+          low = len;
         }
       }
+
+      if (low === -1) {
+        let l = 0, h = len;
+        while (l < h) {
+          const mid = (l + h) >> 1;
+          if (subs[mid].startTime > adjustedTime) h = mid;
+          else l = mid + 1;
+        }
+        low = l;
+      }
+      this._lastCueIdx = low;
 
       const nextFutureCue = low < len ? subs[low] : null;
       let wEnd = nextFutureCue ? nextFutureCue.startTime : Infinity;
@@ -930,10 +983,18 @@
         return;
       }
 
-      if (this.isAdPlaying()) {
-        this.hideSubtitle();
-        this.invalidateCueWindow();
+      const adPlaying = this.isAdPlaying();
+      if (adPlaying) {
+        if (!this._wasAdPlaying) {
+          this._wasAdPlaying = true;
+          this.hideSubtitle();
+          this.invalidateCueWindow();
+        }
         return;
+      }
+      if (this._wasAdPlaying) {
+        this._wasAdPlaying = false;
+        this.invalidateCueWindow();
       }
 
       const currentTime = this.video.currentTime;
@@ -946,37 +1007,16 @@
       const activeCues = this._findCuesAndWindow(adjustedTime);
 
       if (activeCues.length > 0) {
-        let combinedText = "";
         let newKey = "";
-
         if (activeCues.length === 1) {
-          const t = activeCues[0].text ? activeCues[0].text.trim() : "";
-          if (t) {
-            newKey = t;
-            combinedText = t;
-          }
+          newKey = activeCues[0].text;
         } else {
-          const uniqueTexts = [];
-          for (let i = 0; i < activeCues.length; i++) {
-            const t = activeCues[i].text ? activeCues[i].text.trim() : "";
-            if (t && !uniqueTexts.includes(t)) {
-              uniqueTexts.push(t);
-            }
-          }
-          if (uniqueTexts.length > 0) {
-            newKey = uniqueTexts.join("///");
-            combinedText = uniqueTexts.join("<br>");
-          }
+          newKey = activeCues.map((c) => c.text).join("///");
         }
 
-        if (newKey) {
-          if (newKey !== this.currentSubtitleKey) {
-            this.currentSubtitleKey = newKey;
-            this.showSubtitle(combinedText);
-          }
-        } else if (this.currentSubtitleKey) {
-          this.hideSubtitle();
-          this.currentSubtitleKey = "";
+        if (newKey !== this.currentSubtitleKey) {
+          this.currentSubtitleKey = newKey;
+          this.renderActiveCues(activeCues);
         }
       } else if (this.currentSubtitleKey) {
         this.hideSubtitle();
@@ -984,15 +1024,58 @@
       }
     }
 
-    showSubtitle(text) {
+    renderActiveCues(cues) {
       if (!this.subtitleElement) return;
 
-      if (text.indexOf("<") !== -1) {
-        this.subtitleElement.innerHTML = this.sanitizeHTML(text);
-      } else {
-        this.subtitleElement.textContent = text;
+      if (!this._isSubtitleVisible) {
+        this.subtitleElement.style.display = "block";
+        this._isSubtitleVisible = true;
       }
-      this.subtitleElement.style.display = "block";
+
+      if (cues.length === 1) {
+        const cue = cues[0];
+        if (cue.hasHtml === undefined) {
+          cue.hasHtml = cue.text.indexOf("<") !== -1;
+          cue.cleanHtml = cue.hasHtml ? this.sanitizeHTML(cue.text) : null;
+        }
+
+        if (cue.hasHtml) {
+          this.subtitleElement.innerHTML = cue.cleanHtml;
+        } else {
+          this.subtitleElement.textContent = cue.text;
+        }
+        return;
+      }
+
+      let hasAnyHtml = false;
+      const texts = [];
+      for (let i = 0; i < cues.length; i++) {
+        const c = cues[i];
+        if (c.hasHtml === undefined) {
+          c.hasHtml = c.text.indexOf("<") !== -1;
+          c.cleanHtml = c.hasHtml ? this.sanitizeHTML(c.text) : null;
+        }
+        if (c.hasHtml) hasAnyHtml = true;
+        const t = c.hasHtml ? c.cleanHtml : c.text;
+        if (t && !texts.includes(t)) {
+          texts.push(t);
+        }
+      }
+
+      if (texts.length === 0) {
+        this.hideSubtitle();
+        return;
+      }
+
+      if (hasAnyHtml) {
+        this.subtitleElement.innerHTML = texts.join("<br>");
+      } else {
+        this.subtitleElement.textContent = texts.join("\n");
+      }
+    }
+
+    showSubtitle(text) {
+      this.renderActiveCues([{ text }]);
     }
 
     sanitizeHTML(text) {
@@ -1034,8 +1117,9 @@
     }
 
     hideSubtitle() {
-      if (this.subtitleElement) {
+      if (this.subtitleElement && this._isSubtitleVisible) {
         this.subtitleElement.style.display = "none";
+        this._isSubtitleVisible = false;
       }
     }
 
@@ -1047,7 +1131,7 @@
       let textShadowCSS = "0 1px 3px rgba(0, 0, 0, 0.8), 0 0 2px rgba(0, 0, 0, 0.9)";
       if (this._settings.textShadow === "outline") {
         textShadowCSS =
-          "-1.5px -1.5px 0 #000, 1.5px -1.5px 0 #000, -1.5px 1.5px 0 #000, 1.5px 1.5px 0 #000, 0 2px 4px rgba(0,0,0,0.8)";
+          "-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 1px 2px rgba(0, 0, 0, 0.8)";
       } else if (this._settings.textShadow === "glow") {
         textShadowCSS = "0 0 8px rgba(255, 71, 87, 0.8), 0 0 2px rgba(0,0,0,0.8)";
       } else if (this._settings.textShadow === "none") {
@@ -1101,26 +1185,16 @@
       const isFullscreen = !!(document.fullscreenElement || (this.playerContainer && this.playerContainer.classList.contains("ytp-fullscreen")));
       const fontSize = isFullscreen ? Math.round(this._settings.fontSize * 1.25) : this._settings.fontSize;
 
-      this.subtitleElement.style.position = "absolute";
       this.subtitleElement.style.top = positionTop;
       this.subtitleElement.style.bottom = positionBottom;
       this.subtitleElement.style.left = left;
       this.subtitleElement.style.transform = transform;
       this.subtitleElement.style.background = bgRGBA;
       this.subtitleElement.style.color = this._settings.textColor || "#ffffff";
-      this.subtitleElement.style.padding = "6px 14px";
-      this.subtitleElement.style.borderRadius = "6px";
       this.subtitleElement.style.fontSize = `${fontSize}px`;
       this.subtitleElement.style.fontFamily = fontFamily;
-      this.subtitleElement.style.textAlign = "center";
-      this.subtitleElement.style.zIndex = "99997";
-      this.subtitleElement.style.maxWidth = "85%";
-      this.subtitleElement.style.display = wasVisible ? "block" : "none";
-      this.subtitleElement.style.lineHeight = "1.35";
-      this.subtitleElement.style.wordWrap = "break-word";
-      this.subtitleElement.style.overflowWrap = "break-word";
+      this.subtitleElement.style.display = this._isSubtitleVisible ? "block" : "none";
       this.subtitleElement.style.textShadow = textShadowCSS;
-      this.subtitleElement.style.cursor = "grab";
     }
 
     updateSettings(newSettings, notify = false) {
@@ -1137,7 +1211,7 @@
       }
 
       if (this.subtitlesLoaded && this.rawSrtContent) {
-        this.saveCurrentCache();
+        this.saveCurrentCache(null, false);
       }
 
       if (notify) {
@@ -1151,13 +1225,10 @@
       const newOffset = Math.round(((this._settings.timeOffset || 0) + delta) * 10) / 10;
       this._settings.timeOffset = newOffset;
       this.invalidateCueWindow();
-      this.applySettings();
-      this.updateButtonState();
       this.updateSubtitles();
 
-      // Persist the updated timing offset specifically for this YouTube video link!
       if (this.subtitlesLoaded && this.rawSrtContent) {
-        this.saveCurrentCache();
+        this.saveCurrentCache(null, false);
       }
 
       const sign = newOffset > 0 ? "+" : "";
@@ -1168,13 +1239,10 @@
     resetTimeOffset() {
       this._settings.timeOffset = 0.0;
       this.invalidateCueWindow();
-      this.applySettings();
-      this.updateButtonState();
       this.updateSubtitles();
 
-      // Persist the reset timing offset for this video link!
       if (this.subtitlesLoaded && this.rawSrtContent) {
-        this.saveCurrentCache();
+        this.saveCurrentCache(null, false);
       }
 
       this.showToast("Sync reset to 0.0s");
@@ -1302,7 +1370,6 @@
           return;
         }
 
-        // 1. Check local cache
         if (item && item.content) {
           const savedOffset = typeof item.offset === "number" ? item.offset : 0.0;
           this._settings.timeOffset = savedOffset;
@@ -1312,10 +1379,8 @@
           return;
         }
 
-        // 2. If no cache exists, check preset mappings in config.json
         const config = await this.fetchConfig();
 
-        // Check again after async fetch
         if (seq !== this._navigationSeq || this.getCurrentVideoId() !== targetVideoId || !isContextValid()) {
           return;
         }
@@ -1327,7 +1392,6 @@
             if (response.ok) {
               const content = await response.text();
 
-              // Check again after fetching subtitle text
               if (seq !== this._navigationSeq || this.getCurrentVideoId() !== targetVideoId || !isContextValid()) {
                 return;
               }
@@ -1343,7 +1407,6 @@
           } catch (_) {}
         }
       } catch (error) {
-        // Silently ignore navigation interrupts
       } finally {
         this.autoLoadInProgress = false;
       }
@@ -1374,6 +1437,10 @@
       if (this._toastTimeout) {
         clearTimeout(this._toastTimeout);
         this._toastTimeout = null;
+      }
+      if (this._saveCacheTimeout) {
+        clearTimeout(this._saveCacheTimeout);
+        this._saveCacheTimeout = null;
       }
       if (this._navDebounceTimeout) {
         clearTimeout(this._navDebounceTimeout);
@@ -1421,7 +1488,6 @@
     }
   }
 
-  // 4. Reactive SPA YouTube Navigation Event Handling
   function handleNavigation() {
     if (!isContextValid()) return;
 

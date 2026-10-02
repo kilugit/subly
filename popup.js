@@ -1,8 +1,3 @@
-/**
- * Subly - Popup Controller
- * Version 2.0.4 - Resilient YouTube Link Sync & Auto-Restore
- */
-
 function extractVideoId(urlString) {
   try {
     const url = new URL(urlString, "https://www.youtube.com");
@@ -44,16 +39,13 @@ class PopupController {
   }
 
   initDOMElements() {
-    // Header
     this.powerBtn = document.getElementById("powerBtn");
     this.powerText = document.getElementById("powerText");
     this.versionDisplay = document.getElementById("versionDisplay");
 
-    // Tabs
     this.tabBtns = document.querySelectorAll(".tab-btn");
     this.tabContents = document.querySelectorAll(".tab-content");
 
-    // Tab 1: Load
     this.loadedCard = document.getElementById("loadedCard");
     this.loadedName = document.getElementById("loadedName");
     this.loadedCuesCount = document.getElementById("loadedCuesCount");
@@ -70,12 +62,10 @@ class PopupController {
     this.presetText = document.getElementById("presetText");
     this.loadPresetBtn = document.getElementById("loadPresetBtn");
 
-    // Tab 2: Sync
     this.syncValue = document.getElementById("syncValue");
     this.syncBtns = document.querySelectorAll(".sync-btn[data-delta]");
     this.syncResetBtn = document.getElementById("syncResetBtn");
 
-    // Tab 3: Style
     this.previewSubtitle = document.getElementById("previewSubtitle");
     this.fontSizeRange = document.getElementById("fontSizeRange");
     this.fontSizeVal = document.getElementById("fontSizeVal");
@@ -93,11 +83,9 @@ class PopupController {
     this.autoRestoreCheck = document.getElementById("autoRestoreCheck");
     this.autoRestoreVal = document.getElementById("autoRestoreVal");
 
-    // Tab 4: Search
     this.cueSearchInput = document.getElementById("cueSearchInput");
     this.cuesList = document.getElementById("cuesList");
 
-    // Footer & Resizer
     this.resizer = document.getElementById("resizer");
     this.sizeHint = document.getElementById("sizeHint");
   }
@@ -111,10 +99,8 @@ class PopupController {
   }
 
   setupEventListeners() {
-    // Power toggle
     this.powerBtn.addEventListener("click", () => this.toggleSubtitles());
 
-    // Tab switching
     this.tabBtns.forEach((btn) => {
       btn.addEventListener("click", () => {
         const tabId = btn.getAttribute("data-tab");
@@ -122,7 +108,6 @@ class PopupController {
       });
     });
 
-    // File input & Drag/Drop
     this.dropArea.addEventListener("click", () => this.fileInput.click());
     this.fileInput.addEventListener("change", (e) => this.handleFileSelect(e.target.files[0]));
 
@@ -143,17 +128,14 @@ class PopupController {
       }
     });
 
-    // URL Fetch
     this.urlInput.addEventListener("input", () => {
       this.fetchBtn.disabled = !this.urlInput.value.trim();
     });
     this.fetchBtn.addEventListener("click", () => this.handleUrlFetch());
 
-    // Load & Unload buttons
     this.loadBtn.addEventListener("click", () => this.loadSubtitles());
     this.unloadBtn.addEventListener("click", () => this.unloadSubtitles());
 
-    // Sync Steppers
     this.syncBtns.forEach((btn) => {
       btn.addEventListener("click", () => {
         const delta = parseFloat(btn.getAttribute("data-delta"));
@@ -162,7 +144,6 @@ class PopupController {
     });
     this.syncResetBtn.addEventListener("click", () => this.resetSync());
 
-    // Style Controls
     this.fontSizeRange.addEventListener("input", (e) =>
       this.updateSetting("fontSize", parseInt(e.target.value, 10))
     );
@@ -196,7 +177,6 @@ class PopupController {
       });
     }
 
-    // Color swatches
     this.textSwatches.forEach((swatch) => {
       swatch.addEventListener("click", () => {
         const col = swatch.getAttribute("data-color");
@@ -213,13 +193,11 @@ class PopupController {
       });
     });
 
-    // Cue Search with debounce
     this.cueSearchInput.addEventListener("input", () => {
       clearTimeout(this._searchTimeout);
       this._searchTimeout = setTimeout(() => this.filterCues(), 150);
     });
 
-    // Delegated click for cue list jump
     this.cuesList.addEventListener("click", (e) => {
       const item = e.target.closest(".cue-item");
       if (item && item.dataset.time) {
@@ -227,7 +205,6 @@ class PopupController {
       }
     });
 
-    // Auto-update popup when YouTube link / tab changes or content script broadcasts status
     if (typeof chrome !== "undefined" && chrome.tabs?.onUpdated) {
       chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
         if (this.activeTab && this.activeTab.id === tabId && changeInfo.url) {
@@ -261,9 +238,28 @@ class PopupController {
   switchTab(tabId) {
     this.tabBtns.forEach((b) => b.classList.toggle("active", b.getAttribute("data-tab") === tabId));
     this.tabContents.forEach((c) => c.classList.toggle("active", c.id === tabId));
+    if (tabId === "tab-search" && this.loadedSubtitles.length === 0) {
+      this.fetchCuesFromTab();
+    }
   }
 
-  /* ================= TAB 1: FILE & URL HANDLING ================= */
+  async fetchCuesFromTab() {
+    try {
+      const tab = await this.getActiveTab();
+      if (tab?.id) {
+        const res = await this.sendMessage(tab.id, { action: "getCues" });
+        if (res?.success && res.subtitles) {
+          this.loadedSubtitles = res.subtitles;
+          if (this.cueSearchInput?.value?.trim()) {
+            this.filterCues();
+          } else {
+            this.populateCuesList();
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
   handleFileSelect(file) {
     if (!file) return;
     const name = file.name.toLowerCase();
@@ -409,7 +405,6 @@ class PopupController {
     });
   }
 
-  /* ================= TAB 2: SYNC CONTROLS ================= */
   async adjustSync(delta) {
     try {
       const tab = await this.getActiveTab();
@@ -444,7 +439,6 @@ class PopupController {
     this.loadedOffset.textContent = `Sync: ${sign}${safeOffset.toFixed(1)}s`;
   }
 
-  /* ================= TAB 3: STYLING CONTROLS ================= */
   async updateSetting(key, value) {
     this.settings[key] = value;
     this.updateStyleUI();
@@ -491,7 +485,6 @@ class PopupController {
       }
     }
 
-    // Update Live Preview box
     if (this.previewSubtitle) {
       this.previewSubtitle.style.fontSize = `${this.settings.fontSize}px`;
       this.previewSubtitle.style.fontFamily = this.settings.fontFamily;
@@ -505,7 +498,7 @@ class PopupController {
 
       if (this.settings.textShadow === "outline") {
         this.previewSubtitle.style.textShadow =
-          "-1.5px -1.5px 0 #000, 1.5px -1.5px 0 #000, -1.5px 1.5px 0 #000, 1.5px 1.5px 0 #000, 0 2px 4px rgba(0,0,0,0.8)";
+          "-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 1px 2px rgba(0, 0, 0, 0.8)";
       } else if (this.settings.textShadow === "glow") {
         this.previewSubtitle.style.textShadow = "0 0 8px rgba(255, 71, 87, 0.8), 0 0 2px rgba(0,0,0,0.8)";
       } else if (this.settings.textShadow === "none") {
@@ -516,7 +509,6 @@ class PopupController {
     }
   }
 
-  /* ================= TAB 4: SEARCH CUES & JUMP ================= */
   populateCuesList(cuesToRender = null) {
     const list = cuesToRender || this.loadedSubtitles;
 
@@ -526,12 +518,13 @@ class PopupController {
     }
 
     const parser = window.SRTParser || (typeof SRTParser !== "undefined" ? SRTParser : null);
-    const limit = Math.min(list.length, 250);
+    const limit = Math.min(list.length, 100);
     let html = "";
     for (let i = 0; i < limit; i++) {
       const sub = list[i];
+      if (sub._clean === undefined) sub._clean = this.cleanText(sub.text);
       const timeStr = parser ? parser.formatTime(sub.startTime) : `${sub.startTime}s`;
-      html += `<div class="cue-item" data-time="${sub.startTime}"><div class="cue-header"><span class="cue-time">▶ ${timeStr}</span><span class="cue-idx">#${sub.index}</span></div><div class="cue-text">${this.cleanText(sub.text)}</div></div>`;
+      html += `<div class="cue-item" data-time="${sub.startTime}"><div class="cue-header"><span class="cue-time">▶ ${timeStr}</span><span class="cue-idx">#${sub.index}</span></div><div class="cue-text">${sub._clean}</div></div>`;
     }
 
     this.cuesList.innerHTML = html;
@@ -548,9 +541,10 @@ class PopupController {
       return;
     }
 
-    const filtered = this.loadedSubtitles.filter((sub) =>
-      sub.text.toLowerCase().includes(query)
-    );
+    const filtered = this.loadedSubtitles.filter((sub) => {
+      if (sub._lower === undefined) sub._lower = sub.text.toLowerCase();
+      return sub._lower.includes(query);
+    });
     this.populateCuesList(filtered);
   }
 
@@ -563,7 +557,6 @@ class PopupController {
     } catch (_) {}
   }
 
-  /* ================= SUBTITLE POWER & STATUS ================= */
   async toggleSubtitles() {
     try {
       const tab = await this.getActiveTab();
@@ -597,7 +590,6 @@ class PopupController {
     this.loadedOffset.textContent = `Sync: ${sign}${safeOffset.toFixed(1)}s`;
   }
 
-  /* ================= STATUS INITIALIZATION ON OPEN ================= */
   async checkCurrentTabStatus() {
     try {
       this.activeTab = null;
@@ -621,12 +613,16 @@ class PopupController {
         this.updateSyncDisplay(this.settings.timeOffset);
 
         if (res.subtitlesLoaded) {
-          const count = res.subtitlesCount || (res.subtitles ? res.subtitles.length : 0);
-          const needsCuesUpdate = this.loadedSubtitles.length !== count || this._lastRenderedFile !== res.fileName;
-          if (needsCuesUpdate) {
-            this.loadedSubtitles = res.subtitles || [];
+          const count = res.subtitlesCount || 0;
+          if (this._lastRenderedFile !== res.fileName) {
+            this.loadedSubtitles = [];
             this._lastRenderedFile = res.fileName;
-            this.populateCuesList();
+            const activeTabBtn = document.querySelector(".tab-btn.active");
+            if (activeTabBtn?.getAttribute("data-tab") === "tab-search") {
+              this.fetchCuesFromTab();
+            } else {
+              this.populateCuesList();
+            }
           }
           this.updateLoadedCard(res.fileName, count, this.settings.timeOffset);
           this.presetNotice.classList.remove("visible");
@@ -704,36 +700,53 @@ class PopupController {
 
   async getActiveTab() {
     if (this.activeTab) return this.activeTab;
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.id) {
+      const [lastTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      if (lastTab) tab = lastTab;
+    }
     this.activeTab = tab;
     return tab;
   }
 
-  async sendMessage(tabId, message) {
-    try {
-      return await chrome.tabs.sendMessage(tabId, message);
-    } catch (error) {
-      const errMsg = error.message || "";
-      // If the content script is missing or connection was disconnected (e.g. extension was just reloaded)
-      if (
-        errMsg.includes("Receiving end does not exist") ||
-        errMsg.includes("Could not establish connection") ||
-        errMsg.includes("Extension context invalidated")
-      ) {
-        try {
-          if (chrome.scripting && chrome.scripting.executeScript) {
+  async sendMessage(tabId, message, maxAttempts = 4) {
+    if (!tabId || typeof tabId !== "number") {
+      throw new Error("Invalid tab ID");
+    }
+
+    let injected = false;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await chrome.tabs.sendMessage(tabId, message);
+      } catch (error) {
+        const errMsg = error?.message || "";
+        const isDisconnected =
+          errMsg.includes("Receiving end does not exist") ||
+          errMsg.includes("Could not establish connection") ||
+          errMsg.includes("Extension context invalidated");
+
+        if (!isDisconnected) {
+          throw error;
+        }
+
+        if (!injected && chrome.scripting?.executeScript) {
+          injected = true;
+          try {
             await chrome.scripting.executeScript({
               target: { tabId: tabId },
               files: ["srt-parser.js", "content.js"],
             });
-            await new Promise((r) => setTimeout(r, 250));
-            return await chrome.tabs.sendMessage(tabId, message);
+          } catch (injectError) {
+            console.warn("Subly: Auto-inject failed:", injectError.message);
+            throw error;
           }
-        } catch (injectError) {
-          console.warn("Subly: Auto-inject failed:", injectError.message);
         }
+
+        if (attempt === maxAttempts) {
+          throw error;
+        }
+        await new Promise((r) => setTimeout(r, 150 * attempt));
       }
-      throw error;
     }
   }
 
@@ -747,7 +760,6 @@ class PopupController {
     this.status.style.display = "none";
   }
 
-  /* ================= RESIZER & PERSISTENCE ================= */
   setupResizer() {
     let startX = 0, startY = 0, startW = 0, startH = 0;
     let dragging = false;
